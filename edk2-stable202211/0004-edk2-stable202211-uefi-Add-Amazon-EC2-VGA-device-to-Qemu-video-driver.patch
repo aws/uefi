@@ -1,0 +1,40 @@
+From 36f752137b1d95bdf73a98e2cb50ddbfdba48e41 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Sun, 24 May 2020 20:50:14 +0200
+Subject: [PATCH] uefi: Add Amazon EC2 VGA device to Qemu video driver
+
+Amazon's EC2 VGA device is using a different PCI ID than the Qemu one.
+Add the device IDs and disable QXL support for the VGA device.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+
+diff --git a/OvmfPkg/QemuVideoDxe/Driver.c b/OvmfPkg/QemuVideoDxe/Driver.c
+index c28171d137..912342be7d 100644
+--- a/OvmfPkg/QemuVideoDxe/Driver.c
++++ b/OvmfPkg/QemuVideoDxe/Driver.c
+@@ -69,6 +69,12 @@ QEMU_VIDEO_CARD  gQemuVideoCardList[] = {
+     0x0405,
+     QEMU_VIDEO_VMWARE_SVGA,
+     L"QEMU VMWare SVGA"
++  },{
++    PCI_CLASS_DISPLAY_VGA,
++    0x1d0f,
++    0x1111,
++    QEMU_VIDEO_BOCHS,
++    L"Amazon EC2 VGA"
+   },{
+     0     /* end of list */
+   }
+@@ -267,7 +273,8 @@ QemuVideoControllerDriverStart (
+   // IsQxl is based on the detected Card->Variant, which at a later point might
+   // not match Private->Variant.
+   //
+-  IsQxl = (BOOLEAN)(Card->Variant == QEMU_VIDEO_BOCHS);
++  // uEMU is emulating a Bochs VGA device. It is not emulating a QXL-compliant one, however. Disable it.
++  IsQxl = (BOOLEAN)(Card->Variant == QEMU_VIDEO_BOCHS && !StrnCmp(Card->Name, L"QEMU", 4));
+ 
+   //
+   // Save original PCI attributes

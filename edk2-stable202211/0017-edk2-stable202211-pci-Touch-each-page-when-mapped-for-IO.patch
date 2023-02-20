@@ -1,0 +1,55 @@
+From 3dbda6dc52d909d78961533530fbc2e4fcb802e5 Mon Sep 17 00:00:00 2001
+From: James Gowans <jgowans@amazon.com>
+Date: Mon, 3 May 2021 15:52:43 +0100
+Subject: [PATCH] pci: Touch each page when mapped for IO
+
+This functionality is required for memory oversubscription: the instance
+needs to make DMA-able pages resident before initiating a DMA
+transaction. Once the kernel is booted, the ppIOMMU driver takes care of
+this. However, before the kernel has booted, EDK2 will be doing DMA, and
+hence it needs to ensure that the target pages are DMA-able.
+
+Much like how the ppIOMMU hooks into dma_map_ops, this patch adds some
+instructions to the function which is invoked when UEFI makes memory
+region DMA-able to touch all pages in the region.
+
+This patch doesn't attempt to differentiate overcommit vs
+non-overcommit: the functionality of touches pages before DMA will be
+done for all EC2 instances. The reason just to keep stuff simple:
+although non-overcommit instances have no use for this functionality the
+overhead is low enough that it's okay to do it always.
+
+Signed-off-by: James Gowans <jgowans@amazon.com>
+Reviewed-by: Alan Powell <alpowell@amazon.com>
+Reviewed-by: Roland Paterson-Jones <rolandp@amazon.com>
+
+diff --git a/MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciRootBridgeIo.c b/MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciRootBridgeIo.c
+index 157a0ada80..51aa6986dc 100644
+--- a/MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciRootBridgeIo.c
++++ b/MdeModulePkg/Bus/Pci/PciHostBridgeDxe/PciRootBridgeIo.c
+@@ -7,6 +7,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ 
+ **/
+ 
++#include <Library/IoLib.h>
+ #include "PciHostBridge.h"
+ #include "PciRootBridge.h"
+ #include "PciHostResource.h"
+@@ -1331,6 +1332,7 @@ RootBridgeIoMap (
+   PCI_ROOT_BRIDGE_INSTANCE  *RootBridge;
+   EFI_PHYSICAL_ADDRESS      PhysicalAddress;
+   MAP_INFO                  *MapInfo;
++  UINTN                     PageTouchOffset;
+ 
+   if ((HostAddress == NULL) || (NumberOfBytes == NULL) || (DeviceAddress == NULL) ||
+       (Mapping == NULL))
+@@ -1347,6 +1349,9 @@ RootBridgeIoMap (
+ 
+   RootBridge = ROOT_BRIDGE_FROM_THIS (This);
+ 
++  for (PageTouchOffset = 0; PageTouchOffset < *NumberOfBytes; PageTouchOffset += EFI_PAGE_SIZE)
++    MmioRead8((UINTN) HostAddress + PageTouchOffset);
++
+   if (mIoMmu != NULL) {
+     if (!RootBridge->DmaAbove4G) {
+       //

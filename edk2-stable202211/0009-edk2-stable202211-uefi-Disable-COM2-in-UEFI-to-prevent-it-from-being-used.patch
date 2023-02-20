@@ -1,0 +1,32 @@
+From d589b317b5070405cab62d7c0e8e1d07134180e6 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Wed, 7 Oct 2020 10:51:51 +0200
+Subject: [PATCH] uefi: Disable COM2 in UEFI to prevent it from being used
+
+Windows is using COM2 for debugging purposes, so prevent EDK2 from using
+it by not adding the device.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+
+diff --git a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+index b9a86cba51..ef3abe5b7a 100644
+--- a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
++++ b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+@@ -717,6 +717,7 @@ PrepareLpcBridgeDevicePath (
+   EfiBootManagerUpdateConsoleVariable (ConIn, DevicePath, NULL);
+   EfiBootManagerUpdateConsoleVariable (ErrOut, DevicePath, NULL);
+ 
++#if 0
+   //
+   // Register COM2
+   //
+@@ -754,6 +755,7 @@ PrepareLpcBridgeDevicePath (
+   EfiBootManagerUpdateConsoleVariable (ConOut, DevicePath, NULL);
+   EfiBootManagerUpdateConsoleVariable (ConIn, DevicePath, NULL);
+   EfiBootManagerUpdateConsoleVariable (ErrOut, DevicePath, NULL);
++#endif
+ 
+   return EFI_SUCCESS;
+ }

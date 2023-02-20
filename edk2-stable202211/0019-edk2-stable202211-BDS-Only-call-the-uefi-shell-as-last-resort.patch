@@ -1,0 +1,158 @@
+From b6c53800d20eea193b28a5f92fa0445a7ce26761 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Johanna=20Am=C3=A9lie=20Schander?= <mimoja@amazon.de>
+Date: Mon, 28 Feb 2022 13:15:56 +0100
+Subject: [PATCH] BDS: Only call the uefi shell as last resort
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When we are not able to boot one of the Boot Entries the Ovmf Package
+defaults to the UEFI shell by adding it to the BootOrder.
+Customers, who might have misconfigured their BootOrder in some
+way or another (e.g. via a rootdevice replacement or a snapshot restore)
+will therefore be dropped into a UEFI shell instead of beeing booted
+the removable device path that the current implementation of UEFI
+in the EC2 fleet boots.
+
+By removing the UEFI shell entry BDS will now scan for the removable paths
+when all BootEntries have failed. If this also fails we manually start the EFI
+Shell and reset the instance if that also fails or is exited.
+
+Upstream-status: Not applicable
+
+Signed-off-by: Johanna Amélie Schander <mimoja@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+CC: Alex Graf <graf@amazon.com>
+CC: Hendrik Borghorst <hborghor@amazon.com>
+
+diff --git a/MdeModulePkg/Universal/BdsDxe/BdsDxe.inf b/MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
+index 5bac635def..29089dcea1 100644
+--- a/MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
++++ b/MdeModulePkg/Universal/BdsDxe/BdsDxe.inf
+@@ -37,6 +37,7 @@
+ [Packages]
+   MdePkg/MdePkg.dec
+   MdeModulePkg/MdeModulePkg.dec
++  ShellPkg/ShellPkg.dec
+ 
+ [LibraryClasses]
+   DevicePathLib
+@@ -74,6 +75,7 @@
+   gConnectConInEventGuid                        ## SOMETIMES_CONSUMES ## Event
+   gEdkiiStatusCodeDataTypeVariableGuid          ## SOMETIMES_CONSUMES ## GUID
+   gEfiEventReadyToBootGuid                      ## CONSUMES           ## Event
++  gUefiShellFileGuid                            ## SOMETIMES_CONSUMES
+ 
+ [Protocols]
+   gEfiBdsArchProtocolGuid                       ## PRODUCES
+diff --git a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+index 766dde3aae..33db648c68 100644
+--- a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
++++ b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+@@ -656,6 +656,49 @@ BdsFormalizeEfiGlobalVariable (
+   BdsFormalizeOSIndicationVariable ();
+ }
+ 
++STATIC
++EFI_STATUS
++GetFvLoadOption (
++  EFI_GUID                         *FileGuid,
++  EFI_BOOT_MANAGER_LOAD_OPTION     *NewOption
++  )
++{
++  EFI_STATUS                        Status;
++  MEDIA_FW_VOL_FILEPATH_DEVICE_PATH FileNode;
++  EFI_LOADED_IMAGE_PROTOCOL         *LoadedImage;
++  EFI_DEVICE_PATH_PROTOCOL          *DevicePath;
++
++  Status = gBS->HandleProtocol (
++                  gImageHandle,
++                  &gEfiLoadedImageProtocolGuid,
++                  (VOID **) &LoadedImage
++                  );
++  ASSERT_EFI_ERROR (Status);
++
++  EfiInitializeFwVolDevicepathNode (&FileNode, FileGuid);
++  DevicePath = DevicePathFromHandle (LoadedImage->DeviceHandle);
++  ASSERT (DevicePath != NULL);
++  DevicePath = AppendDevicePathNode (
++                 DevicePath,
++                 (EFI_DEVICE_PATH_PROTOCOL *) &FileNode
++                 );
++  ASSERT (DevicePath != NULL);
++
++  Status = EfiBootManagerInitializeLoadOption (
++             NewOption,
++             LoadOptionNumberUnassigned,
++             LoadOptionTypeBoot,
++             LOAD_OPTION_ACTIVE,
++             L"Internal FV Binary",
++             DevicePath,
++             NULL,
++             0
++             );
++  ASSERT_EFI_ERROR (Status);
++  FreePool (DevicePath);
++  return Status;
++}
++
+ /**
+ 
+   Service routine for BdsInstance->Entry(). Devices are connected, the
+@@ -691,6 +734,7 @@ BdsEntry (
+   EFI_DEVICE_PATH_PROTOCOL        *FilePath;
+   EFI_STATUS                      BootManagerMenuStatus;
+   EFI_BOOT_MANAGER_LOAD_OPTION    PlatformDefaultBootOption;
++  EFI_BOOT_MANAGER_LOAD_OPTION    BootEfiShell;
+ 
+   HotkeyTriggered = NULL;
+   Status          = EFI_SUCCESS;
+@@ -1112,6 +1156,27 @@ BdsEntry (
+     }
+   }
+ 
++  // Get the Uefi Shell boot entry
++  Status = GetFvLoadOption (
++    &gUefiShellFileGuid,
++    &BootEfiShell
++  );
++
++  if (Status == EFI_SUCCESS) {
++    AsciiPrint (
++      "No bootable option or device was found.\n"
++      "Dropping to the EFI Shell.\n"
++      "Exiting the UEFI shell will restart the system"
++    );
++
++    EfiBootManagerBoot (&BootEfiShell);
++
++    // If we can not drop into the Efi Shell or the shell exited reset
++    gRT->ResetSystem (EfiResetWarm, EFI_SUCCESS, 0, NULL);
++
++    // Unreachable
++  }
++
+   EfiBootManagerFreeLoadOption (&PlatformDefaultBootOption);
+ 
+   DEBUG ((DEBUG_ERROR, "[Bds] Unable to boot!\n"));
+diff --git a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+index ef3abe5b7a..a8a1cf9089 100644
+--- a/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
++++ b/OvmfPkg/Library/PlatformBootManagerLib/BdsPlatform.c
+@@ -1707,15 +1707,6 @@ PlatformBootManagerAfterConsole (
+ 
+   EfiBootManagerRefreshAllBootOption ();
+ 
+-  //
+-  // Register UEFI Shell
+-  //
+-  PlatformRegisterFvBootOption (
+-    &gUefiShellFileGuid,
+-    L"EFI Internal Shell",
+-    LOAD_OPTION_ACTIVE
+-    );
+-
+   RemoveStaleFvFileOptions ();
+   SetBootOrderFromQemu ();
+ 

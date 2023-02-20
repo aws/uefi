@@ -1,0 +1,27 @@
+From 7ac1cafb5a326fd961dc5e94a8266426d09a9ddb Mon Sep 17 00:00:00 2001
+From: Nicolas Ojeda Leon <ncoleon@amazon.com>
+Date: Wed, 26 May 2021 17:57:40 +0200
+Subject: [PATCH] OvmfPkg: Increase PcdPciMmio64Size to 16 TiB
+
+Increased the 64-bit PCI aperture size PCD token to offer 16 TiB.
+The need to increase size beyond 32 GiB comes from platforms
+that having multiple GPUs, thus requiring more than 32 GiB
+high memory address space.
+
+Signed-off-by: Nicolas Ojeda Leon <ncoleon@amazon.com>
+Cc: Alexander Graf <graf@amazon.de>
+Cc: Hendrik Borghorst <hborghor@amazon.de>
+
+diff --git a/OvmfPkg/OvmfPkgX64.dsc b/OvmfPkg/OvmfPkgX64.dsc
+index 63c3a47aea..30bb110566 100644
+--- a/OvmfPkg/OvmfPkgX64.dsc
++++ b/OvmfPkg/OvmfPkgX64.dsc
+@@ -653,7 +653,7 @@
+ !ifdef $(CSM_ENABLE)
+   gUefiOvmfPkgTokenSpaceGuid.PcdPciMmio64Size|0x0
+ !else
+-  gUefiOvmfPkgTokenSpaceGuid.PcdPciMmio64Size|0x800000000
++  gUefiOvmfPkgTokenSpaceGuid.PcdPciMmio64Size|0x100000000000
+ !endif
+ 
+   gEfiMdePkgTokenSpaceGuid.PcdPlatformBootTimeOut|0

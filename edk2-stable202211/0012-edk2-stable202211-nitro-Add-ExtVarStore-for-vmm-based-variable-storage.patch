@@ -1,0 +1,851 @@
+From b7eb43ca09600ba534ecd220ab4aa546cf6f1fde Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Johanna=20Am=C3=A9lie=20Schander?= <mimoja@amazon.de>
+Date: Wed, 21 Apr 2021 15:12:39 +0200
+Subject: [PATCH] nitro: Add ExtVarStore for vmm based variable storage
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+To be able to process Variable Store requests outside of EDK2 we
+need to proxy the requests to the outside. This commit does this.
+The functions to the Runtime Table are overwriten and the Bootservice
+exit is hooked.
+As a word of warning: This code live in guest-accessible memory.
+All boundschecks here are best practice and can help debugging but
+are completely unsafe as they could be overwriten by the guest.
+
+CC: Deepak Gupta <dkgupta@amazon.com>
+CC: Hendrik Borghorst <hborghor@amazon.com>
+CC: Evgeny Iakovlev <eyakovl@amazon.com>
+
+Signed-off-by: Johanna Amélie Schander <mimoja@amazon.de>
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Sebastian Ott <sebott@amazon.de>
+
+diff --git a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+index 3858adf673..9f81e870f1 100644
+--- a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
++++ b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+@@ -70,7 +70,6 @@
+   HobLib
+   TpmMeasurementLib
+   AuthVariableLib
+-  VarCheckLib
+   VariableFlashInfoLib
+   VariablePolicyLib
+   VariablePolicyHelperLib
+diff --git a/OvmfPkg/OvmfPkgX64.dsc b/OvmfPkg/OvmfPkgX64.dsc
+index 30bb110566..615bbba40d 100644
+--- a/OvmfPkg/OvmfPkgX64.dsc
++++ b/OvmfPkg/OvmfPkgX64.dsc
+@@ -32,6 +32,7 @@
+   DEFINE SECURE_BOOT_ENABLE      = FALSE
+   DEFINE SMM_REQUIRE             = FALSE
+   DEFINE SOURCE_DEBUG_ENABLE     = FALSE
++  DEFINE EXTERNAL_VARIABLE_STORE = FALSE
+ 
+ !include OvmfPkg/OvmfTpmDefines.dsc.inc
+ 
+@@ -248,7 +249,9 @@
+ !else
+   AuthVariableLib|MdeModulePkg/Library/AuthVariableLibNull/AuthVariableLibNull.inf
+ !endif
++!if $(EXTERNAL_VARIABLE_STORE) == FALSE
+   VarCheckLib|MdeModulePkg/Library/VarCheckLib/VarCheckLib.inf
++!endif
+   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLib.inf
+   VariablePolicyHelperLib|MdeModulePkg/Library/VariablePolicyHelperLib/VariablePolicyHelperLib.inf
+   VariableFlashInfoLib|MdeModulePkg/Library/BaseVariableFlashInfoLib/BaseVariableFlashInfoLib.inf
+@@ -1087,6 +1090,9 @@
+   #
+   # Variable driver stack (non-SMM)
+   #
++  !if $(EXTERNAL_VARIABLE_STORE) == TRUE
++    nitro/ExtVarStore/ExtVarStore.inf
++  !else
+   OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+   OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf {
+     <LibraryClasses>
+@@ -1097,6 +1103,7 @@
+     <LibraryClasses>
+       NULL|MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLib.inf
+   }
++!endif
+ !endif
+ 
+   #
+diff --git a/OvmfPkg/OvmfPkgX64.fdf b/OvmfPkg/OvmfPkgX64.fdf
+index c0f5a1ef3c..68400549c5 100644
+--- a/OvmfPkg/OvmfPkgX64.fdf
++++ b/OvmfPkg/OvmfPkgX64.fdf
+@@ -223,9 +223,11 @@ APRIORI DXE {
+   # encrypted region (Since the range has not been marked shared/unencrypted).
+   INF  OvmfPkg/AmdSevDxe/AmdSevDxe.inf
+   INF  OvmfPkg/TdxDxe/TdxDxe.inf
++!if $(EXTERNAL_VARIABLE_STORE) == FALSE
+ !if $(SMM_REQUIRE) == FALSE
+   INF  OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+ !endif
++!endif
+ }
+ 
+ #
+@@ -396,11 +398,15 @@ INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+ #
+ # Variable driver stack (non-SMM)
+ #
++!if $(EXTERNAL_VARIABLE_STORE) == TRUE
++  INF nitro/ExtVarStore/ExtVarStore.inf
++!else
+ INF  OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+ INF  OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf
+ INF  MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+ INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+ !endif
++!endif
+ 
+ #
+ # TPM support
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+new file mode 100644
+index 0000000000..ade749c053
+--- /dev/null
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -0,0 +1,466 @@
++/** @file
++ *
++ * Proxies the Variable store RuntimeService to the host
++ *
++ * Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++ * SPDX-License-Identifier: BSD-2-Clause-Patent
++ */
++
++#include <Library/BaseLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/DebugLib.h>
++#include <Library/UefiLib.h>
++#include <Library/SynchronizationLib.h>
++
++#include <Library/DxeServicesTableLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++
++#include <PiDxe.h>
++
++#include <Library/BaseLib.h>
++#include <Library/PcdLib.h>
++#include <Library/BaseMemoryLib.h>
++#include <Library/MemoryAllocationLib.h>
++#include <Library/UefiBootServicesTableLib.h>
++#include <Library/UefiRuntimeLib.h>
++#include <Library/DebugLib.h>
++#include <Library/UefiLib.h>
++#include <Library/HobLib.h>
++#include <Library/DxeServicesTableLib.h>
++#include <Library/DevicePathLib.h>
++
++#include <Guid/VariableFormat.h>
++#include <Guid/GlobalVariable.h>
++#include <Protocol/Variable.h>
++#include <Protocol/VariableWrite.h>
++
++#include "interface.h"
++
++static EFI_EVENT mExtVirtualAddressChangeEvent = NULL;
++
++static SPIN_LOCK var_lock;
++
++static VOID *comm_buf_phys;
++VOID *comm_buf;
++
++STATIC
++EFI_STATUS
++EFIAPI
++ExtGetVariable (
++  IN      CHAR16            *VariableName,
++  IN      EFI_GUID          *VendorGuid,
++  OUT     UINT32            *Attributes OPTIONAL,
++  IN OUT  UINTN             *DataSize,
++  OUT     VOID              *Data OPTIONAL
++  )
++{
++  EFI_STATUS status;
++  UINT32 attr;
++  EFI_STATUS rc;
++
++  // Checks taken from FSVariable.c
++  if (VariableName == NULL || VendorGuid == NULL || DataSize == NULL) {
++    return EFI_INVALID_PARAMETER;
++  }
++
++  if (VariableName[0] == 0) {
++    return EFI_NOT_FOUND;
++  }
++
++  AcquireSpinLock(&var_lock);
++
++  uefi_param_buf buf = {
++    .buf = comm_buf,
++    .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,
++  };
++
++  uefi_param_parser parser = {
++    .buf = buf,
++  };
++
++  uefi_param_writer writer = {
++  .buf = buf,
++  };
++
++  rc = serialize_uint32(&writer, VAR_STORE_VERSION);
++  rc |= serialize_command(&writer, COMMAND_GET_VARIABLE);
++  rc |= serialize_name(&writer, VariableName);
++  rc |= serialize_guid(&writer, VendorGuid);
++  rc |= serialize_uintn(&writer, *DataSize);
++
++  /* Serialization failure */
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  exec_command(comm_buf_phys);
++
++  rc = unserialize_result(&parser, &status);
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  switch (status) {
++  case EFI_SUCCESS:
++    rc = unserialize_uint32(&parser, &attr);
++    if (rc != EFI_SUCCESS)
++      goto out;
++    if (Attributes)
++      *Attributes = attr;
++    if (Data) {
++      rc = unserialize_data(&parser, Data, DataSize, *DataSize);
++      if (rc != EFI_SUCCESS)
++        goto out;
++    } else {
++      status = EFI_INVALID_PARAMETER;
++      goto out;
++    }
++    break;
++  case EFI_BUFFER_TOO_SMALL:
++    rc = unserialize_uintn(&parser, DataSize);
++    break;
++  default:
++    break;
++  }
++
++out:
++  ReleaseSpinLock(&var_lock);
++
++  /* Deserialization failure */
++  if (rc != EFI_SUCCESS) {
++    return EFI_DEVICE_ERROR;
++  }
++
++  return status;
++}
++
++STATIC
++EFI_STATUS
++EFIAPI
++ExtGetNextVariableName (
++  IN OUT  UINTN             *VariableNameSize,
++  IN OUT  CHAR16            *VariableName,
++  IN OUT  EFI_GUID          *VendorGuid
++  )
++{
++  EFI_STATUS status;
++  EFI_STATUS rc;
++
++  uefi_param_buf buf = {
++    .buf = comm_buf,
++    .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,
++  };
++
++  uefi_param_parser parser = {
++    .buf = buf,
++  };
++
++  uefi_param_writer writer = {
++    .buf = buf,
++  };
++
++  if (!VariableNameSize || !VariableName || !VendorGuid)
++      return EFI_INVALID_PARAMETER;
++
++  if (StrSize(VariableName) > *VariableNameSize)
++      return EFI_INVALID_PARAMETER;
++
++  AcquireSpinLock(&var_lock);
++
++  rc = serialize_uint32(&writer, VAR_STORE_VERSION);
++  rc |= serialize_command(&writer, COMMAND_GET_NEXT_VARIABLE);
++  rc |= serialize_uintn(&writer, *VariableNameSize);
++  rc |= serialize_name(&writer, VariableName);
++  rc |= serialize_guid(&writer, VendorGuid);
++
++  /* Serialization failure */
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  exec_command(comm_buf_phys);
++
++  rc = unserialize_result(&parser, &status);
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  switch (status) {
++  case EFI_SUCCESS:
++    rc = unserialize_data(&parser, (UINT8*) VariableName, VariableNameSize, *VariableNameSize);
++    if (rc != EFI_SUCCESS)
++      goto out;
++    VariableName[*VariableNameSize / 2] = '\0';
++    *VariableNameSize += sizeof(*VariableName);
++    rc = unserialize_guid(&parser, VendorGuid);
++    if (rc != EFI_SUCCESS)
++      goto out;
++    break;
++  case EFI_BUFFER_TOO_SMALL:
++    rc = unserialize_uintn(&parser, VariableNameSize);
++    if (rc != EFI_SUCCESS)
++      goto out;
++    break;
++  default:
++    break;
++  }
++
++out:
++  ReleaseSpinLock(&var_lock);
++
++  /* Deserialization failure */
++  if (rc != EFI_SUCCESS) {
++    return EFI_DEVICE_ERROR;
++  }
++  return status;
++}
++
++
++STATIC
++EFI_STATUS
++EFIAPI
++ExtSetVariable (
++  IN CHAR16                  *VariableName,
++  IN EFI_GUID                *VendorGuid,
++  IN UINT32                  Attributes,
++  IN UINTN                   DataSize,
++  IN VOID                    *Data
++)
++{
++  EFI_STATUS status;
++  EFI_STATUS rc;
++
++  if (!VariableName || !VendorGuid)
++    return EFI_INVALID_PARAMETER;
++
++  if (!Data && DataSize != 0)
++    return EFI_INVALID_PARAMETER;
++
++  if (VariableName[0] == '\0')
++    return EFI_INVALID_PARAMETER;
++
++  uefi_param_buf buf = {
++    .buf = comm_buf,
++    .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,
++  };
++
++  uefi_param_parser parser = {
++    .buf = buf,
++  };
++
++  uefi_param_writer writer = {
++    .buf = buf,
++  };
++
++  AcquireSpinLock(&var_lock);
++
++  rc = serialize_uint32(&writer, VAR_STORE_VERSION);
++  rc |= serialize_command(&writer, COMMAND_SET_VARIABLE);
++  rc |= serialize_name(&writer, VariableName);
++  rc |= serialize_guid(&writer, VendorGuid);
++  rc |= serialize_data(&writer, Data, DataSize);
++  rc |= serialize_uint32(&writer, Attributes);
++
++  /* Serialization failure */
++  if (rc != EFI_SUCCESS) {
++    ReleaseSpinLock(&var_lock);
++    return EFI_DEVICE_ERROR;
++  }
++
++  exec_command(comm_buf_phys);
++
++  rc = unserialize_result(&parser, &status);
++
++  ReleaseSpinLock(&var_lock);
++
++  /* Deserialization failure */
++  if (rc != EFI_SUCCESS) {
++    return EFI_DEVICE_ERROR;
++  }
++
++  return status;
++}
++
++
++STATIC
++EFI_STATUS
++EFIAPI
++ExtQueryVariableInfo (
++  IN  UINT32                 Attributes,
++  OUT UINT64                 *MaximumVariableStorageSize,
++  OUT UINT64                 *RemainingVariableStorageSize,
++  OUT UINT64                 *MaximumVariableSize
++  )
++{
++  EFI_STATUS status;
++  UINT64 temp;
++  EFI_STATUS rc;
++  uefi_param_buf buf = {
++    .buf = comm_buf,
++    .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,
++  };
++
++  uefi_param_parser parser = {
++    .buf = buf,
++  };
++
++  uefi_param_writer writer = {
++    .buf = buf,
++  };
++
++  AcquireSpinLock(&var_lock);
++
++  rc = serialize_uint32(&writer, VAR_STORE_VERSION);
++  rc |= serialize_command(&writer, COMMAND_QUERY_VARIABLE_INFO);
++  rc |= serialize_uint32(&writer, Attributes);
++
++  /* Serialization failure */
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  exec_command(comm_buf_phys);
++
++  rc = unserialize_result(&parser, &status);
++  if (rc != EFI_SUCCESS)
++    goto out;
++
++  switch (status) {
++  case EFI_SUCCESS:
++    rc = unserialize_uint64(&parser, MaximumVariableStorageSize ? MaximumVariableStorageSize : &temp);
++    rc |= unserialize_uint64(&parser, RemainingVariableStorageSize ? RemainingVariableStorageSize : &temp);
++    rc |= unserialize_uint64(&parser, MaximumVariableSize ? MaximumVariableSize : &temp);
++    break;
++  default:
++    break;
++  }
++
++out:
++  ReleaseSpinLock(&var_lock);
++
++  /* Deserialization failure */
++  if (rc != EFI_SUCCESS) {
++    return EFI_DEVICE_ERROR;
++  }
++
++  return status;
++}
++
++
++VOID
++EFIAPI
++OnExitBootServices (
++  IN EFI_EVENT                               Event,
++  IN VOID                                    *Context
++  )
++{
++  EFI_STATUS rc;
++  uefi_param_buf buf = {
++    .buf = comm_buf,
++    .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,
++  };
++
++  uefi_param_writer writer = {
++    .buf = buf,
++  };
++
++  AcquireSpinLock(&var_lock);
++
++  rc = serialize_uint32(&writer, VAR_STORE_VERSION);
++  rc |= serialize_command(&writer, COMMAND_ENTER_RUNTIME);
++
++  /* Serialization failure */
++  if (rc != EFI_SUCCESS) {
++    ReleaseSpinLock(&var_lock);
++    return;
++  }
++
++  // We dont care about the return value, we cannot do anything with it anyways
++  exec_command(comm_buf_phys);
++
++  ReleaseSpinLock(&var_lock);
++}
++
++
++STATIC
++VOID
++EFIAPI
++VariableClassAddressChangeEvent (
++  IN EFI_EVENT        Event,
++  IN VOID             *Context
++  )
++{
++  AcquireSpinLock(&var_lock);
++  /*
++   * Convert the comm_buf pointer from a physical to a virtual address for use
++   * at runtime.
++   */
++  EfiConvertPointer (0x0, (VOID **) &comm_buf);
++  ReleaseSpinLock(&var_lock);
++}
++
++/**
++ * The user Entry Point for the external variable store driver.
++ *
++ * @param[in]  ImageHandle    The firmware allocated handle for the EFI image.
++ * @param[in]  SystemTable    A pointer to the EFI System Table.
++ *
++ * @retval EFI_SUCCESS        The entry point is executed successfully.
++ * @retval EFI_UNSUPPORTED    Platform does not support the store.
++ * @retval Other              Some error occurs when executing this entry point.
++ *
++**/
++EFI_STATUS EFIAPI
++ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
++{
++  EFI_STATUS Status = EFI_SUCCESS;
++  EFI_EVENT ExitBootServiceEvent;
++
++  comm_buf_phys = AllocateRuntimePages(SHMEM_PAGES);
++  if (comm_buf_phys == NULL)
++    return EFI_OUT_OF_RESOURCES;
++  comm_buf = comm_buf_phys;
++
++  InitializeSpinLock(&var_lock);
++
++  // Taken from FSVariable.c
++  SystemTable->RuntimeServices->GetVariable         = ExtGetVariable;
++  SystemTable->RuntimeServices->GetNextVariableName = ExtGetNextVariableName;
++  SystemTable->RuntimeServices->SetVariable         = ExtSetVariable;
++  SystemTable->RuntimeServices->QueryVariableInfo   = ExtQueryVariableInfo;
++
++  //
++  // Install the Variable Runtime Architectural Protocol
++  //
++  Status = gBS->InstallMultipleProtocolInterfaces (
++                  &ImageHandle,
++                  &gEfiVariableArchProtocolGuid,
++                  NULL,
++                  &gEfiVariableWriteArchProtocolGuid,
++                  NULL,
++                  NULL);
++  ASSERT_EFI_ERROR (Status);
++
++  // Register the event when we need to remap on Runtime change
++  Status = gBS->CreateEventEx (
++                  EVT_NOTIFY_SIGNAL,
++                  TPL_NOTIFY,
++                  VariableClassAddressChangeEvent,
++                  NULL,
++                  &gEfiEventVirtualAddressChangeGuid,
++                  &mExtVirtualAddressChangeEvent
++                  );
++  ASSERT_EFI_ERROR (Status);
++
++  //
++  // Register the event to inform VMM variable store that it is at runtime.
++  // As we trust the initial guest payload to be customer trusted if it is signed
++  // we can trust on it not manipulating us (as it would decrease its own security)
++  //
++  Status = gBS->CreateEventEx (
++         EVT_NOTIFY_SIGNAL,
++         TPL_NOTIFY,
++         OnExitBootServices,
++         NULL,
++         &gEfiEventExitBootServicesGuid,
++         &ExitBootServiceEvent
++         );
++  ASSERT_EFI_ERROR (Status);
++
++  return Status;
++}
+diff --git a/nitro/ExtVarStore/ExtVarStore.inf b/nitro/ExtVarStore/ExtVarStore.inf
+new file mode 100644
+index 0000000000..62930e0e1c
+--- /dev/null
++++ b/nitro/ExtVarStore/ExtVarStore.inf
+@@ -0,0 +1,60 @@
++## @file
++#  Proxies the Variable store RuntimeService to the host
++#
++#  Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++#  SPDX-License-Identifier: BSD-2-Clause-Patent
++#
++##
++
++[Defines]
++  INF_VERSION                    = 0x00010005
++  BASE_NAME                      = ExtVarStore
++  FILE_GUID                      = 3984EE42-976A-46C5-8A64-23FB340035BC
++  MODULE_TYPE                    = DXE_RUNTIME_DRIVER
++  VERSION_STRING                 = 0.1
++  ENTRY_POINT                    = ExtVarStoreInit
++
++[Sources]
++  ExtVarStore.c
++  interface.h
++
++## Taken from VariableRuntimeDxe.inf
++[Packages]
++  MdePkg/MdePkg.dec
++  MdeModulePkg/MdeModulePkg.dec
++
++[LibraryClasses]
++  PcdLib
++  BaseMemoryLib
++  BaseLib
++  UefiBootServicesTableLib
++  UefiRuntimeLib
++  DebugLib
++  UefiLib
++  HobLib
++  DxeServicesTableLib
++  DevicePathLib
++  UefiDriverEntryPoint
++  MemoryAllocationLib
++  SynchronizationLib
++  PciLib
++
++[Guids]
++  gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event
++  gEfiEventVirtualAddressChangeGuid             ## CONSUMES             ## Event
++  gEfiVariableGuid
++  gEfiGlobalVariableGuid                        ## PRODUCES ## Variable Guid
++
++[Protocols]
++  gEfiVariableArchProtocolGuid
++  gEfiVariableWriteArchProtocolGuid
++
++[Pcd]
++  gEfiMdeModulePkgTokenSpaceGuid.PcdMaxVariableSize
++  gEfiMdeModulePkgTokenSpaceGuid.PcdMaxHardwareErrorVariableSize
++  gEfiMdeModulePkgTokenSpaceGuid.PcdVariableStoreSize
++  gEfiMdeModulePkgTokenSpaceGuid.PcdHwErrStorageSize
++##  gUefiOvmfPkgTokenSpaceGuid.PcdOvmfFlashVariablesEnable
++
++[Depex]
++  TRUE
+diff --git a/nitro/ExtVarStore/interface.h b/nitro/ExtVarStore/interface.h
+new file mode 100644
+index 0000000000..5225f07c9c
+--- /dev/null
++++ b/nitro/ExtVarStore/interface.h
+@@ -0,0 +1,197 @@
++/*
++ * Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
++ * SPDX-License-Identifier: BSD-2-Clause-Patent
++ */
++#pragma once
++
++#include <Library/BaseLib.h>
++#include <Library/DebugLib.h>
++#include <Library/IoLib.h>
++
++enum command_t {
++  COMMAND_GET_VARIABLE,
++  COMMAND_SET_VARIABLE,
++  COMMAND_GET_NEXT_VARIABLE,
++  COMMAND_QUERY_VARIABLE_INFO,
++  COMMAND_NOTIFY_SB_FAILURE,
++  COMMAND_ENTER_RUNTIME,
++};
++
++#define PORT_ADDRESS 0x0100
++#define SHMEM_PAGES  16
++
++#define VAR_STORE_VERSION 1
++
++typedef struct {
++	CHAR8 *buf;
++	UINTN remaining;
++} uefi_param_buf;
++
++typedef struct {
++	uefi_param_buf buf;
++} uefi_param_parser;
++
++typedef struct {
++	uefi_param_buf buf;
++} uefi_param_writer;
++
++static inline void uefi_param_buf_inc(uefi_param_buf *buf, UINTN size)
++{
++	buf->buf += size;
++	buf->remaining -= size;
++}
++
++static inline BOOLEAN uefi_param_buf_fits(uefi_param_buf *buf, UINTN size)
++{
++	return (buf->remaining >= size);
++}
++
++static inline EFI_STATUS
++uefi_parser_pop_head(uefi_param_parser *parser, void *data, UINTN size)
++{
++	uefi_param_buf *buf = &parser->buf;
++
++	if (!uefi_param_buf_fits(buf, size))
++	  return EFI_ABORTED;
++
++	CopyMem(data, buf->buf, size);
++	uefi_param_buf_inc(buf, size);
++	return EFI_SUCCESS;
++}
++
++static inline EFI_STATUS
++uefi_writer_push(uefi_param_writer *writer, void *data, UINTN size)
++{
++	uefi_param_buf *buf = &writer->buf;
++
++	if (!uefi_param_buf_fits(buf, size))
++	  return EFI_ABORTED;
++
++	CopyMem(buf->buf, data, size);
++	uefi_param_buf_inc(buf, size);
++	return EFI_SUCCESS;
++}
++
++static inline EFI_STATUS
++serialize_data(uefi_param_writer *writer, UINT8 *data, UINTN data_len)
++{
++	if (uefi_writer_push(writer, &data_len, sizeof(data_len)) != EFI_SUCCESS)
++	  return EFI_ABORTED;
++	if (uefi_writer_push(writer, data, data_len) != EFI_SUCCESS)
++	  return EFI_ABORTED;
++	return EFI_SUCCESS;
++}
++
++static inline EFI_STATUS serialize_result(uefi_param_writer *writer, EFI_STATUS status)
++{
++	return uefi_writer_push(writer, &status, sizeof(status));
++}
++
++static inline EFI_STATUS serialize_guid(uefi_param_writer *writer, EFI_GUID *guid)
++{
++	return uefi_writer_push(writer, (void *)guid, sizeof(EFI_GUID));
++}
++
++static inline EFI_STATUS serialize_timestamp(uefi_param_writer *writer, EFI_TIME *timestamp)
++{
++	return uefi_writer_push(writer, timestamp, sizeof(*timestamp));
++}
++
++static inline EFI_STATUS serialize_uintn(uefi_param_writer *writer, UINTN var)
++{
++	return uefi_writer_push(writer, &var, sizeof(var));
++}
++
++static inline EFI_STATUS serialize_uint32(uefi_param_writer *writer, UINT32 var)
++{
++	return uefi_writer_push(writer, &var, sizeof(var));
++}
++
++static inline EFI_STATUS serialize_command(uefi_param_writer *writer,
++				     enum command_t cmd)
++{
++	UINT32 data = (UINT32) cmd;
++	return serialize_uint32(writer, data);
++}
++
++static inline EFI_STATUS serialize_uint64(uefi_param_writer *writer, UINT64 var)
++{
++	return uefi_writer_push(writer, &var, sizeof(var));
++}
++
++static inline EFI_STATUS
++serialize_name(uefi_param_writer *writer, CHAR16 *VariableName)
++{
++	UINTN VarNameSize = StrLen(VariableName) * sizeof(*VariableName);
++	return serialize_data(writer, (UINT8*) VariableName, VarNameSize);
++}
++
++
++static inline EFI_STATUS unserialize_command(uefi_param_parser *parser,
++				       enum command_t *cmd)
++{
++	UINT32 data;
++	if (uefi_parser_pop_head(parser, &data, sizeof(data)) != EFI_SUCCESS)
++	  return EFI_ABORTED;
++
++	*cmd = (enum command_t)data;
++	return EFI_SUCCESS;
++}
++
++// Adjusted for Nitro to use static buffers
++static inline EFI_STATUS unserialize_data(uefi_param_parser *parser,
++					UINT8 *target_buffer,
++					UINTN *len,
++					UINTN limit)
++{
++	if (uefi_parser_pop_head(parser, len, sizeof(*len)) != EFI_SUCCESS)
++	  return EFI_ABORTED;
++	if (uefi_parser_pop_head(parser, target_buffer, *len) != EFI_SUCCESS)
++	  return EFI_ABORTED;
++
++	return EFI_SUCCESS;
++}
++
++static inline EFI_STATUS unserialize_guid(uefi_param_parser *parser, EFI_GUID *guid)
++{
++	return uefi_parser_pop_head(parser, guid, sizeof(EFI_GUID));
++}
++
++static inline EFI_STATUS unserialize_timestamp(uefi_param_parser *parser,
++					 EFI_TIME *timestamp)
++{
++	return uefi_parser_pop_head(parser, timestamp, sizeof(*timestamp));
++}
++
++static inline EFI_STATUS unserialize_uintn(uefi_param_parser *parser, UINTN *ret)
++{
++	return uefi_parser_pop_head(parser, ret, sizeof(*ret));
++}
++
++static inline EFI_STATUS unserialize_boolean(uefi_param_parser *parser, BOOLEAN *ret)
++{
++	return uefi_parser_pop_head(parser, ret, sizeof(*ret));
++}
++
++static inline EFI_STATUS unserialize_uint32(uefi_param_parser *parser, UINT32 *ret)
++{
++	return uefi_parser_pop_head(parser, ret, sizeof(*ret));
++}
++
++static inline EFI_STATUS unserialize_uint64(uefi_param_parser *parser, UINT64 *ret)
++{
++	return uefi_parser_pop_head(parser, ret, sizeof(*ret));
++}
++
++static inline EFI_STATUS unserialize_result(uefi_param_parser *parser, EFI_STATUS *status)
++{
++	return uefi_parser_pop_head(parser, status, sizeof(*status));
++}
++
++static inline void
++exec_command(VOID *buf)
++{
++  MemoryFence ();
++  IoWrite32 (PORT_ADDRESS, ((UINTN)buf) >> 12);
++  MemoryFence ();
++}

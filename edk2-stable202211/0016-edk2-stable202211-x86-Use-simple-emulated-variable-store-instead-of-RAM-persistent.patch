@@ -1,0 +1,80 @@
+From 89f7626324077b308f831b678f617aa174b65c14 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Wed, 30 Jun 2021 16:42:01 +0200
+Subject: [PATCH] x86: Use simple emulated variable store instead of RAM
+ persistent
+
+The ovmf package provides a variable store that is emulating a
+flash-based persistence storage for UEFI variable inside the RAM. On
+reboot the RAM is persisted so that variables are not reset.
+
+Nitro has no need for that feature and manually wiped the emulated
+store on reboot with a previous commit enabling us, to keep certain
+variables in the future. The feature was never used.
+
+Now that we are offering the persistent variable soon over Nitro
+itself we can just use the RAM-based variable store that has no
+persistence. The same store is already used for ARM instances.
+
+Testing done:
+- Boot Ubuntu Groovy instance
+- Boot Windows 2016 and 2019
+- Remove all boot entries in Ubuntu with efibootmgr and reboot
+successfully.
+
+- Boot with old Fvb-variable store, remove all variables in guest, LU to
+new Nitro with new var store, reboot guest, check variables are
+repopulated: Works
+- Boot with new variable store, remove all variables in guest, LU to old
+Fvb-based variable store, reboot guest, check variables are repopulated:
+Works
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Signed-off-by: Sabin Rapan <sabrapan@amazon.com>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: Adamos Ttofari <attofari@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Lav Joshi <lavjoshi@amazon.de>
+
+diff --git a/OvmfPkg/OvmfPkgX64.dsc b/OvmfPkg/OvmfPkgX64.dsc
+index 190505ba3a..c26832dd43 100644
+--- a/OvmfPkg/OvmfPkgX64.dsc
++++ b/OvmfPkg/OvmfPkgX64.dsc
+@@ -630,6 +630,7 @@
+ [PcdsDynamicDefault]
+   # only set when
+   #   ($(SMM_REQUIRE) == FALSE)
++  gEfiMdeModulePkgTokenSpaceGuid.PcdEmuVariableNvModeEnable|TRUE
+   gEfiMdeModulePkgTokenSpaceGuid.PcdEmuVariableNvStoreReserved|0
+ 
+ !if $(SMM_REQUIRE) == FALSE
+@@ -1094,12 +1095,6 @@
+   !if $(EXTERNAL_VARIABLE_STORE) == TRUE
+     nitro/ExtVarStore/ExtVarStore.inf
+   !endif
+-  OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+-  OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf {
+-    <LibraryClasses>
+-      PlatformFvbLib|OvmfPkg/Library/EmuVariableFvbLib/EmuVariableFvbLib.inf
+-  }
+-  MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+   MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf {
+     <LibraryClasses>
+       NULL|MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLib.inf
+diff --git a/OvmfPkg/OvmfPkgX64.fdf b/OvmfPkg/OvmfPkgX64.fdf
+index 5fcf7e9c51..1c59d58970 100644
+--- a/OvmfPkg/OvmfPkgX64.fdf
++++ b/OvmfPkg/OvmfPkgX64.fdf
+@@ -404,10 +404,8 @@ INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+ !if $(EXTERNAL_VARIABLE_STORE) == TRUE
+   INF nitro/ExtVarStore/ExtVarStore.inf
+ !endif
+-INF  OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+-INF  OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf
+-INF  MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+-INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
++# Nitro: We use the Xen VariableRuntimeDxe.inf to eliminate flash
++INF MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+ !endif
+ 
+ #

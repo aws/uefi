@@ -1,0 +1,123 @@
+From 17246cdfce3e920cff52dcc58acb9d2e1e7c5510 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Wed, 12 May 2021 09:58:13 +0200
+Subject: [PATCH] Varstore: Use MMIO access for ARM
+
+On ARM, we want to use MMIO instead of PIO to notify the hypervisor. Adapt
+the code so that it uses MMIO on ARM.
+
+Signed-off-by: Alexander Graf <graf@amazon.com>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Lav Joshi <lavjoshi@amazon.de>
+CC: Deepak Gupta <dkgupta@amazon.com>
+CC: Alexander Graf <graf@amazon.com>
+CC: David Woodhouse <dwmw@amazon.com>
+CC: Hendrik Borghorst <hborghor@amazon.com>
+CC: Saurav Sachidanand <sauravsc@amazon.com>
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index ade749c053..c2b0008c97 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -37,12 +37,27 @@
+ #include "interface.h"
+ 
+ static EFI_EVENT mExtVirtualAddressChangeEvent = NULL;
++#ifdef EXTVAR_MMIO_ADDRESS
++static UINTN mExtVarMMIO = EXTVAR_MMIO_ADDRESS;
++#endif
+ 
+ static SPIN_LOCK var_lock;
+ 
+ static VOID *comm_buf_phys;
+ VOID *comm_buf;
+ 
++static void
++exec_command(VOID *buf)
++{
++  MemoryFence ();
++#ifdef EXTVAR_MMIO_ADDRESS
++  MmioWrite64 (mExtVarMMIO, ((UINTN)buf) >> 12);
++#else
++  IoWrite32 (EXTVAR_PORT_ADDRESS, ((UINTN)buf) >> 12);
++#endif
++  MemoryFence ();
++}
++
+ STATIC
+ EFI_STATUS
+ EFIAPI
+@@ -391,6 +406,9 @@ VariableClassAddressChangeEvent (
+    * at runtime.
+    */
+   EfiConvertPointer (0x0, (VOID **) &comm_buf);
++#ifdef EXTVAR_MMIO_ADDRESS
++  EfiConvertPointer (0x0, (VOID **) &mExtVarMMIO);
++#endif
+   ReleaseSpinLock(&var_lock);
+ }
+ 
+@@ -416,6 +434,20 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+     return EFI_OUT_OF_RESOURCES;
+   comm_buf = comm_buf_phys;
+ 
++#ifdef EXTVAR_MMIO_ADDRESS
++  Status = gDS->AddMemorySpace (
++      EfiGcdMemoryTypeMemoryMappedIo,
++      EXTVAR_MMIO_ADDRESS, EFI_PAGE_SIZE,
++      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME
++      );
++  ASSERT_EFI_ERROR (Status);
++
++  Status = gDS->SetMemorySpaceAttributes (
++      EXTVAR_MMIO_ADDRESS, EFI_PAGE_SIZE,
++      EFI_MEMORY_UC | EFI_MEMORY_RUNTIME);
++  ASSERT_EFI_ERROR (Status);
++#endif
++
+   InitializeSpinLock(&var_lock);
+ 
+   // Taken from FSVariable.c
+diff --git a/nitro/ExtVarStore/ExtVarStore.inf b/nitro/ExtVarStore/ExtVarStore.inf
+index 62930e0e1c..09c75ee5dd 100644
+--- a/nitro/ExtVarStore/ExtVarStore.inf
++++ b/nitro/ExtVarStore/ExtVarStore.inf
+@@ -37,6 +37,9 @@
+   UefiDriverEntryPoint
+   MemoryAllocationLib
+   SynchronizationLib
++  IoLib
++
++[LibraryClasses.X64]
+   PciLib
+ 
+ [Guids]
+diff --git a/nitro/ExtVarStore/interface.h b/nitro/ExtVarStore/interface.h
+index 5225f07c9c..eee9ae5c65 100644
+--- a/nitro/ExtVarStore/interface.h
++++ b/nitro/ExtVarStore/interface.h
+@@ -17,7 +17,11 @@ enum command_t {
+   COMMAND_ENTER_RUNTIME,
+ };
+ 
+-#define PORT_ADDRESS 0x0100
++#ifdef __aarch64__
++#define EXTVAR_MMIO_ADDRESS 0x09050000
++#else
++#define EXTVAR_PORT_ADDRESS 0x0100
++#endif
+ #define SHMEM_PAGES  16
+ 
+ #define VAR_STORE_VERSION 1
+@@ -187,11 +191,3 @@ static inline EFI_STATUS unserialize_result(uefi_param_parser *parser, EFI_STATU
+ {
+ 	return uefi_parser_pop_head(parser, status, sizeof(*status));
+ }
+-
+-static inline void
+-exec_command(VOID *buf)
+-{
+-  MemoryFence ();
+-  IoWrite32 (PORT_ADDRESS, ((UINTN)buf) >> 12);
+-  MemoryFence ();
+-}

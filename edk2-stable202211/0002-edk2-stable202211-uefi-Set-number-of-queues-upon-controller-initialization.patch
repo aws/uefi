@@ -1,0 +1,159 @@
+From 0a62f7922358e178d84afdeaebf2286445d1dd33 Mon Sep 17 00:00:00 2001
+From: Simon Veith <sveith@amazon.de>
+Date: Tue, 28 Aug 2018 19:45:57 +0200
+Subject: [PATCH] uefi: Set number of queues upon controller initialization
+
+The NVMe implementation in Nitro expects a driver to first request a
+certain number of completion and submission queues using the "Number of
+Queues" feature before using any of them. Otherwise, it defaults to
+providing zero queues each.
+
+UEFI has not been aware of this requirement and defaulted to simply using
+the two queues it needs of each type. This change implements the logic
+required for issuing the NVMe "Set Features" command in order to properly
+set up the queues, thus allowing UEFI to boot on droplets.
+
+This restriction has not been an issue in the QEMU environment because its
+NVMe implementation provides 64 queues each, no matter what the guest has
+requested.
+
+Signed-off-by: Simon Veith <sveith@amazon.de>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: KarimAllah Ahmed <karahmed@amazon.de>
+Reviewed-by: Ali Saidi <alisaidi@amazon.com>
+Reviewed-by: Peter Lawthers <lawthers@amazon.de>
+
+diff --git a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressHci.c b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressHci.c
+index b90c48731c..1423b03b8c 100644
+--- a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressHci.c
++++ b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressHci.c
+@@ -558,6 +558,59 @@ NvmeIdentifyNamespace (
+   return Status;
+ }
+ 
++/**
++  Request a number of submission and request queues from a NVMe controller.
++
++  @param  Private          The pointer to the NVME_CONTROLLER_PRIVATE_DATA data structure.
++  @param  NumCQsRequested  Number of completion queues to request
++  @param  NumSQsRequested  Number of submission queues to request
++
++  @return EFI_SUCCESS      Successfully allocated at least the requested number of queues.
++  @return EFI_DEVICE_ERROR Failed to allocate some or all of the requested queues.
++
++**/
++EFI_STATUS
++NvmeSetNumberOfQueues (
++  IN NVME_CONTROLLER_PRIVATE_DATA      *Private,
++  IN UINT16                             NumCQsRequested,
++  IN UINT16                             NumSQsRequested
++  )
++{
++  EFI_NVM_EXPRESS_PASS_THRU_COMMAND_PACKET CommandPacket;
++  EFI_NVM_EXPRESS_COMMAND                  Command;
++  EFI_NVM_EXPRESS_COMPLETION               Completion;
++  EFI_STATUS                               Status;
++
++  DEBUG ((EFI_D_INFO, "Requesting %d completion queues and %d submission "
++                      "queues\n", NumCQsRequested, NumSQsRequested));
++
++  ZeroMem (&CommandPacket, sizeof(EFI_NVM_EXPRESS_PASS_THRU_COMMAND_PACKET));
++  ZeroMem (&Command, sizeof(EFI_NVM_EXPRESS_COMMAND));
++  ZeroMem (&Completion, sizeof(EFI_NVM_EXPRESS_COMPLETION));
++
++  CommandPacket.NvmeCmd        = &Command;
++  CommandPacket.NvmeCompletion = &Completion;
++
++  CommandPacket.CommandTimeout = NVME_GENERIC_TIMEOUT;
++  CommandPacket.QueueType      = NVME_ADMIN_QUEUE;
++
++  Command.Cdw0.Opcode          = NVME_ADMIN_SET_FEATURES_CMD;
++  Command.Cdw10                = NVME_FID_NUMBER_OF_QUEUES;
++  Command.Cdw11                = ((UINT32)NumCQsRequested << 16)
++                                 | NumSQsRequested;
++
++  Command.Flags                = CDW10_VALID | CDW11_VALID;
++
++  Status = Private->Passthru.PassThru (
++                               &Private->Passthru,
++                               0,
++                               &CommandPacket,
++                               NULL
++                               );
++
++  return Status;
++}
++
+ /**
+   Create io completion queue.
+ 
+@@ -912,6 +965,12 @@ NvmeControllerInit (
+   DEBUG ((DEBUG_INFO, "    CQES      : 0x%x\n", Private->ControllerData->Cqes));
+   DEBUG ((DEBUG_INFO, "    NN        : 0x%x\n", Private->ControllerData->Nn));
+ 
++  Status = NvmeSetNumberOfQueues (Private, 2, 2);
++  if (EFI_ERROR(Status)) {
++   DEBUG((DEBUG_ERROR, "NvmeControllerInit: failed to set number of queues\n"));
++   return Status;
++  }
++
+   //
+   // Create two I/O completion queues.
+   // One for blocking I/O, one for non-blocking I/O.
+diff --git a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressPassthru.c b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressPassthru.c
+index f37baa626a..de79ea6be7 100644
+--- a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressPassthru.c
++++ b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpressPassthru.c
+@@ -597,21 +597,10 @@ NvmExpressPassThru (
+   }
+ 
+   Sq->Prp[0] = (UINT64)(UINTN)Packet->TransferBuffer;
+-  if ((Packet->QueueType == NVME_ADMIN_QUEUE) &&
+-      ((Sq->Opc == NVME_ADMIN_CRIOCQ_CMD) || (Sq->Opc == NVME_ADMIN_CRIOSQ_CMD)))
+-  {
+-    //
+-    // Currently, we only use the IO Completion/Submission queues created internally
+-    // by this driver during controller initialization. Any other IO queues created
+-    // will not be consumed here. The value is little to accept external IO queue
+-    // creation requests, so here we will return EFI_UNSUPPORTED for external IO
+-    // queue creation request.
+-    //
+-    if (!Private->CreateIoQueue) {
+-      DEBUG ((DEBUG_ERROR, "NvmExpressPassThru: Does not support external IO queues creation request.\n"));
+-      return EFI_UNSUPPORTED;
+-    }
+-  } else if ((Sq->Opc & (BIT0 | BIT1)) != 0) {
++  if (((Sq->Opc & (BIT0 | BIT1)) != 0) &&
++      !((Packet->QueueType == NVME_ADMIN_QUEUE) && ((Sq->Opc == NVME_ADMIN_CRIOCQ_CMD)
++                                                    || (Sq->Opc == NVME_ADMIN_CRIOSQ_CMD)
++                                                    || (Sq->Opc == NVME_ADMIN_SET_FEATURES_CMD)))) {
+     //
+     // If the NVMe cmd has data in or out, then mapping the user buffer to the PCI controller specific addresses.
+     //
+diff --git a/MdePkg/Include/IndustryStandard/Nvme.h b/MdePkg/Include/IndustryStandard/Nvme.h
+index 4a1d92c45d..2e6d96ce05 100644
+--- a/MdePkg/Include/IndustryStandard/Nvme.h
++++ b/MdePkg/Include/IndustryStandard/Nvme.h
+@@ -1005,6 +1005,22 @@ typedef struct {
+   UINT8     Reserved2[296];
+ } NVME_SMART_HEALTH_INFO_LOG;
+ 
++//
++// Set Features - Feature Identifiers
++// (ref. spec. v1.1 Figure 89)
++//
++#define NVME_FID_ARBITRATION             0x01
++#define NVME_FID_POWER_MANAGEMENT        0x02
++#define NVME_FID_LBA_RANGE_TYPE          0x03
++#define NVME_FID_TEMPERATURE_THRESHOLD   0x04
++#define NVME_FID_ERROR_RECOVERY          0x05
++#define NVME_FID_VOLATILE_WRITE_CACHE    0x06
++#define NVME_FID_NUMBER_OF_QUEUES        0x07
++#define NVME_FID_INTERRUPT_COALESCING    0x08
++#define NVME_FID_INTERRUPT_VECTOR_CONFIG 0x09
++#define NVME_FID_WRITE_ATOMICITY         0x0A
++#define NVME_FID_ASYNC_EVENT_CONFIG      0x0B
++
+ #pragma pack()
+ 
+ #endif

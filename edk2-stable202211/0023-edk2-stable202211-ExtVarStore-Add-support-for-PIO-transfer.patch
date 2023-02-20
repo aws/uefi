@@ -1,0 +1,276 @@
+From a927427a30168ce0059bfb71795feb6c51b8aa06 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Tue, 7 Feb 2023 03:42:04 +0000
+Subject: [PATCH] ExtVarStore: Add support for PIO transfer
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+In some environments, memory transfer during runtime with physical
+offsets does not work. If we detect such an environment, let's fall back
+to an emergency PIO based transfer mechanism.
+
+This PIO based transfer mechanism copies the local runtime buffer over
+to the the hypervisor, then initiates a command and receives the return
+buffer back into the runtime buffer region. We put in multiple safe
+guards to ensure we retry if the hypervisor buffer disappeared in
+between, for example because of a live-update operation.
+
+Upstream-status: Not applicable
+
+Signed-off-by: Alexander Graf <graf@amazon.com>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Johanna 'Mimoja' Amélie Schander <mimoja@amazon.de>
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index 03a7d0896c..d1305254a8 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -46,15 +46,112 @@ static SPIN_LOCK *var_lock;
+ static VOID *comm_buf_phys;
+ VOID *comm_buf;
+ 
++#define BOUNCE_ATTEMPTS_MAX 2
++
++static BOOLEAN bounceData = FALSE;
++
++STATIC EFI_STATUS read_feature_flags(struct feature_word *features);
++
++STATIC VOID
++ExtVarStoreWrite32(UINT32 val)
++{
++#ifdef EXTVAR_MMIO_ADDRESS
++  MmioWrite32 (mExtVarMMIO, val);
++#else
++  IoWrite32 (EXTVAR_PORT_ADDRESS, val);
++#endif
++}
++
++STATIC UINT32
++ExtVarStoreRead32(VOID)
++{
++#ifdef EXTVAR_MMIO_ADDRESS
++  return MmioRead32 (mExtVarMMIO);
++#else
++  return IoRead32 (EXTVAR_PORT_ADDRESS);
++#endif
++}
++
++STATIC VOID exec_bounce(UINT8 *buf, UINTN len)
++{
++  UINT32 crc32, local_crc32;
++  UINT32 attempts;
++  UINT16 outsize;
++  UINT32 i, value;
++  struct transfer_in transfer = {
++    .magic_value = TRANSFER_KICK_MAGIC,
++  };
++  struct transfer_in kick = {
++    .magic_value = TRANSFER_KICK_MAGIC,
++  };
++
++  /*
++   * Try multiple times on failure. This can happen if the host erases
++   * the transfer buffer while we were transferring data.
++   */
++  for (attempts = 0; attempts < BOUNCE_ATTEMPTS_MAX; attempts++) {
++    /* Send buffer content to host */
++    for (i = 0; i < len; i += sizeof(transfer.u.data)) {
++      transfer.magic_value = TRANSFER_STREAM_MAGIC;
++      transfer.u.data[0] = buf[i];
++      transfer.u.data[1] = buf[i + 1];
++
++      ExtVarStoreWrite32 (*(UINT32 *)&transfer);
++    }
++
++    /* Kick off the operation */
++    kick.u.len = i,
++    ExtVarStoreWrite32 (*(UINT32 *)&kick);
++
++    /* Initialize the buffer so we can checksum */
++    SetMem(comm_buf, SHMEM_PAGES * EFI_PAGE_SIZE, 0xaa);
++
++    outsize = (UINT16) ExtVarStoreRead32 ();
++
++    if (!outsize || (outsize & 3)) {
++      /* Too little or unaligned data means something went wrong, reset */
++      kick.u.len = TRANSFER_INVALID_LEN;
++      ExtVarStoreWrite32 (*(UINT32 *)&kick);
++      continue;
++    }
++
++    crc32 = ExtVarStoreRead32 ();
++    outsize -= sizeof(crc32);
++
++    /* Copy return buffer back to guest */
++    for (i = outsize; i > 0; i -= sizeof(value)) {
++      value = ExtVarStoreRead32 ();
++
++      CopyMem (&buf[i - sizeof(value)], &value, sizeof(value));
++    }
++
++    /* Validate checksum */
++    local_crc32 = CalculateCrc32 (buf, outsize);
++    if (crc32 == local_crc32)
++      break;
++
++    /* Let's dump the buffer */
++    DEBUG ((DEBUG_ERROR, "Invalid checksum: 0x%08x | 0x%08x\n", crc32, local_crc32));
++
++    for (i = 0; i < outsize; i++) {
++      DEBUG ((DEBUG_ERROR, "buf[%d] = 0x%02x\n", i, buf[i]));
++    }
++  }
++}
++
+ static void
+-exec_command(VOID *buf)
++exec_command(VOID *buf, UINTN len)
+ {
+   MemoryFence ();
++  if (bounceData) {
++    exec_bounce (comm_buf, len);
++  } else {
+ #ifdef EXTVAR_MMIO_ADDRESS
+-  MmioWrite64 (mExtVarMMIO, ((UINTN)buf) >> 12);
++    MmioWrite64 (mExtVarMMIO, ((UINTN)buf) >> EFI_PAGE_SHIFT);
+ #else
+-  IoWrite32 (EXTVAR_PORT_ADDRESS, ((UINTN)buf) >> 12);
++    IoWrite32 (EXTVAR_PORT_ADDRESS, ((UINTN)buf) >> EFI_PAGE_SHIFT);
+ #endif
++  }
+   MemoryFence ();
+ }
+ 
+@@ -62,11 +159,7 @@ static UINT32 read_interface()
+ {
+   UINT32 value;
+   MemoryFence ();
+-#ifdef EXTVAR_MMIO_ADDRESS
+-  value = MmioRead32 (mExtVarMMIO);
+-#else
+-  value = IoRead32 (EXTVAR_PORT_ADDRESS);
+-#endif
++  value = ExtVarStoreRead32 ();
+   MemoryFence ();
+   return value;
+ }
+@@ -120,7 +213,7 @@ ExtGetVariable (
+   if (rc != EFI_SUCCESS)
+     goto out;
+ 
+-  exec_command(comm_buf_phys);
++  exec_command(comm_buf_phys, buf.remaining - writer.buf.remaining);
+ 
+   rc = unserialize_result(&parser, &status);
+   if (rc != EFI_SUCCESS)
+@@ -203,7 +296,7 @@ ExtGetNextVariableName (
+   if (rc != EFI_SUCCESS)
+     goto out;
+ 
+-  exec_command(comm_buf_phys);
++  exec_command(comm_buf_phys, buf.remaining - writer.buf.remaining);
+ 
+   rc = unserialize_result(&parser, &status);
+   if (rc != EFI_SUCCESS)
+@@ -291,7 +384,7 @@ ExtSetVariable (
+     return EFI_DEVICE_ERROR;
+   }
+ 
+-  exec_command(comm_buf_phys);
++  exec_command(comm_buf_phys, buf.remaining - writer.buf.remaining);
+ 
+   rc = unserialize_result(&parser, &status);
+ 
+@@ -342,7 +435,7 @@ ExtQueryVariableInfo (
+   if (rc != EFI_SUCCESS)
+     goto out;
+ 
+-  exec_command(comm_buf_phys);
++  exec_command(comm_buf_phys, buf.remaining - writer.buf.remaining);
+ 
+   rc = unserialize_result(&parser, &status);
+   if (rc != EFI_SUCCESS)
+@@ -399,7 +492,7 @@ OnExitBootServices (
+   }
+ 
+   // We dont care about the return value, we cannot do anything with it anyways
+-  exec_command(comm_buf_phys);
++  exec_command(comm_buf_phys, buf.remaining - writer.buf.remaining);
+ 
+   ReleaseSpinLock(var_lock);
+ }
+diff --git a/nitro/ExtVarStore/interface.h b/nitro/ExtVarStore/interface.h
+index 87d3d8ae31..8b5967528b 100644
+--- a/nitro/ExtVarStore/interface.h
++++ b/nitro/ExtVarStore/interface.h
+@@ -31,10 +31,68 @@ enum command_t {
+  */
+ #define VAR_STORE_MAGIC_VALUE 0xec
+ 
++#pragma pack (1)
+ struct feature_word {
+   UINT8 magic_value;
+   UINT32 features:24;
+-} _packed;
++};
++#pragma pack ()
++
++/* Magic value to indicate that a TRANSFER write is a transfer buffer transfer */
++#define TRANSFER_STREAM_MAGIC 0xffec
++
++#pragma pack (1)
++struct transfer_in {
++        UINT16 magic_value;
++        union {
++                UINT8 data[2];
++                UINT16 len;
++        } u;
++};
++#pragma pack ()
++
++/* Magic value to indicate that a TRANSFER write is a transfer buffer kick */
++#define TRANSFER_KICK_MAGIC 0xffed
++
++/* Length value to indicate invalid data */
++#define TRANSFER_INVALID_LEN 0xffff
++
++/*
++ * When the CRC32 feature is available, every command response automatically
++ * generates a CRC32 checksum trailing its contents. That way, the receiving
++ * end can validate whether all data is correct after full deserialization.
++ * Alternatively, they can use this feature in combination with TRANSFER
++ * which allows them to validate whether the bounce buffer was copied correctly.
++ */
++#define FEATURE_CRC32       0x1
++
++/*
++ * When the TRANSFER feature is available, the I/O register receives a state
++ * machine with additional semantics that allow a guest to transfer data
++ * into a buffer in vmm as well as receive the response from the buffer.
++ *
++ * To use the TRANSFER feature, the guest needs to transmit its request into a
++ * temporary buffer in vmm using `struct transfer_in` writes with
++ * `idx == TRANSFER_STREAM_MAGIC` and 2 bytes of data in each I/O write to the
++ * register. Once transferred, it issues a `struct transfer_in` write with
++ * `idx == TRANSFER_KICK_MAGIC` and the length of the just written data in its
++ * `len` field.
++ *
++ * Once the write returns, the guest can read the response buffer using the
++ * same I/O port in 32bit read mode. The first 32bit word contains the length
++ * of the full response payload including CRC32. The next 32bit word contains
++ * the CRC32 checksum of the full response payload.
++ *
++ * After that, each 32bit read returns a little endian 32bit part of the
++ * response buffer, in descending order. The first response will contain the
++ * last 4 bytes, the next one the 4 bytes before that and so on. Guests should
++ * read the I/O port for response data for as many words as necessary to
++ * transfer the full buffer as described through the previously returned size.
++ *
++ * On error, guests can issue a `TRANSFER_KICK_MAGIC` write command with
++ * invalid `len` field. This will cause a reset of the internal state machine.
++ */
++#define FEATURE_TRANSFER    0x2
+ 
+ typedef struct {
+ 	CHAR8 *buf;

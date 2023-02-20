@@ -1,0 +1,291 @@
+From 81dfe89aa4228b9996e968ee1d05604a4d7f5861 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Tue, 1 Jun 2021 17:12:56 +0200
+Subject: [PATCH] varstore: Read feature flags from VMM over PIO/MMIO
+
+This commit adds logic to fetch a 32bit feature flag value from the
+Hypervisor over the PIO that is also used to initiate the variable store
+commands.
+
+It reads a magic value and if it is correct it enable the new variable
+store for now.
+
+The existing variable store only gets enabled if no other variable
+store is active. If the new variable store should be activated and
+another one is already registered the CPU enters dead looping to prevent
+instance booting.
+
+In the future the feature flag might be extended to signal availability
+of certain features.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Sebastian Ott <sebott@amazon.de>
+
+diff --git a/CryptoPkg/Library/BaseCryptLib/SysCall/RuntimeMemAllocation.c b/CryptoPkg/Library/BaseCryptLib/SysCall/RuntimeMemAllocation.c
+index 0d2ca604ea..cf6f41f8c4 100644
+--- a/CryptoPkg/Library/BaseCryptLib/SysCall/RuntimeMemAllocation.c
++++ b/CryptoPkg/Library/BaseCryptLib/SysCall/RuntimeMemAllocation.c
+@@ -12,6 +12,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Library/UefiRuntimeLib.h>
+ #include <Library/MemoryAllocationLib.h>
+ #include <Guid/EventGroup.h>
++#include <Protocol/Variable.h>
+ 
+ // ----------------------------------------------------------------
+ // Initial version. Needs further optimizations.
+@@ -356,6 +357,17 @@ RuntimeCryptLibConstructor (
+   EFI_STATUS  Status;
+   VOID        *Buffer;
+ 
++  VOID *DummyProtocol;
++  Status = gBS->LocateProtocol (
++                &gEfiVariableArchProtocolGuid,
++                NULL,
++                (VOID **)&DummyProtocol);
++
++  // Abort if another variable store is already registered
++  if (Status == EFI_SUCCESS) {
++    return RETURN_SUCCESS;
++  }
++
+   //
+   // Pre-allocates runtime space for possible cryptographic operations
+   //
+diff --git a/MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLibNullClass.c b/MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLibNullClass.c
+index 9fbfd9df02..7e14b11d95 100644
+--- a/MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLibNullClass.c
++++ b/MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLibNullClass.c
+@@ -13,11 +13,13 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Library/BaseMemoryLib.h>
+ #include <Library/DebugLib.h>
+ #include <Library/DevicePathLib.h>
++#include <Library/UefiBootServicesTableLib.h>
+ 
+ #include <Guid/VariableFormat.h>
+ #include <Guid/GlobalVariable.h>
+ #include <Guid/HardwareErrorVariable.h>
+ #include <Guid/ImageAuthentication.h>
++#include <Protocol/Variable.h>
+ 
+ typedef
+ EFI_STATUS
+@@ -940,6 +942,19 @@ VarCheckUefiLibNullClassConstructor (
+   VOID
+   )
+ {
++  VOID *DummyProtocol;
++  EFI_STATUS Status;
++
++  Status = gBS->LocateProtocol (
++                &gEfiVariableArchProtocolGuid,
++                NULL,
++                (VOID **)&DummyProtocol);
++
++  // Abort if another variable store is already registered
++  if (Status == EFI_SUCCESS) {
++    return RETURN_SUCCESS;
++  }
++
+   VariablePropertySetUefiDefined ();
+   VarCheckLibRegisterSetVariableCheckHandler (SetVariableCheckHandlerUefiDefined);
+ 
+diff --git a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableDxe.c b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableDxe.c
+index d5c409c914..55e0f0533b 100644
+--- a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableDxe.c
++++ b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableDxe.c
+@@ -542,6 +542,16 @@ VariableServiceInitialize (
+   EFI_EVENT   ReadyToBootEvent;
+   EFI_EVENT   EndOfDxeEvent;
+ 
++  VOID *DummyProtocol;
++  Status = gBS->LocateProtocol (
++                &gEfiVariableArchProtocolGuid,
++                NULL,
++                (VOID **)&DummyProtocol);
++
++  // Abort if another variable store is already registered
++  if (Status == EFI_SUCCESS)
++    return EFI_UNSUPPORTED;
++
+   Status = VariableCommonInitialize ();
+   ASSERT_EFI_ERROR (Status);
+ 
+diff --git a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+index 9f81e870f1..3858adf673 100644
+--- a/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
++++ b/MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+@@ -70,6 +70,7 @@
+   HobLib
+   TpmMeasurementLib
+   AuthVariableLib
++  VarCheckLib
+   VariableFlashInfoLib
+   VariablePolicyLib
+   VariablePolicyHelperLib
+diff --git a/OvmfPkg/OvmfPkgX64.dsc b/OvmfPkg/OvmfPkgX64.dsc
+index 615bbba40d..1b3540a86b 100644
+--- a/OvmfPkg/OvmfPkgX64.dsc
++++ b/OvmfPkg/OvmfPkgX64.dsc
+@@ -249,9 +249,7 @@
+ !else
+   AuthVariableLib|MdeModulePkg/Library/AuthVariableLibNull/AuthVariableLibNull.inf
+ !endif
+-!if $(EXTERNAL_VARIABLE_STORE) == FALSE
+   VarCheckLib|MdeModulePkg/Library/VarCheckLib/VarCheckLib.inf
+-!endif
+   VariablePolicyLib|MdeModulePkg/Library/VariablePolicyLib/VariablePolicyLib.inf
+   VariablePolicyHelperLib|MdeModulePkg/Library/VariablePolicyHelperLib/VariablePolicyHelperLib.inf
+   VariableFlashInfoLib|MdeModulePkg/Library/BaseVariableFlashInfoLib/BaseVariableFlashInfoLib.inf
+@@ -1090,9 +1088,12 @@
+   #
+   # Variable driver stack (non-SMM)
+   #
++  # ### WARNING ###
++  # Don't change the order of ExtVarStore.inf. It defines the initialization
++  # order of the variable stores.
+   !if $(EXTERNAL_VARIABLE_STORE) == TRUE
+     nitro/ExtVarStore/ExtVarStore.inf
+-  !else
++  !endif
+   OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+   OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf {
+     <LibraryClasses>
+@@ -1103,7 +1104,6 @@
+     <LibraryClasses>
+       NULL|MdeModulePkg/Library/VarCheckUefiLib/VarCheckUefiLib.inf
+   }
+-!endif
+ !endif
+ 
+   #
+diff --git a/OvmfPkg/OvmfPkgX64.fdf b/OvmfPkg/OvmfPkgX64.fdf
+index 68400549c5..5fcf7e9c51 100644
+--- a/OvmfPkg/OvmfPkgX64.fdf
++++ b/OvmfPkg/OvmfPkgX64.fdf
+@@ -398,15 +398,17 @@ INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableSmmRuntimeDxe.inf
+ #
+ # Variable driver stack (non-SMM)
+ #
++# ### WARNING ###
++# Don't change the order of ExtVarStore.inf. It defines the initialization
++# order of the variable stores.
+ !if $(EXTERNAL_VARIABLE_STORE) == TRUE
+   INF nitro/ExtVarStore/ExtVarStore.inf
+-!else
++!endif
+ INF  OvmfPkg/QemuFlashFvbServicesRuntimeDxe/FvbServicesRuntimeDxe.inf
+ INF  OvmfPkg/EmuVariableFvbRuntimeDxe/Fvb.inf
+ INF  MdeModulePkg/Universal/FaultTolerantWriteDxe/FaultTolerantWriteDxe.inf
+ INF  MdeModulePkg/Universal/Variable/RuntimeDxe/VariableRuntimeDxe.inf
+ !endif
+-!endif
+ 
+ #
+ # TPM support
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index c2b0008c97..0b4aa0a07f 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -58,6 +58,19 @@ exec_command(VOID *buf)
+   MemoryFence ();
+ }
+ 
++static UINT32 read_interface()
++{
++  UINT32 value;
++  MemoryFence ();
++#ifdef EXTVAR_MMIO_ADDRESS
++  value = MmioRead32 (mExtVarMMIO);
++#else
++  value = IoRead32 (EXTVAR_PORT_ADDRESS);
++#endif
++  MemoryFence ();
++  return value;
++}
++
+ STATIC
+ EFI_STATUS
+ EFIAPI
+@@ -412,6 +425,20 @@ VariableClassAddressChangeEvent (
+   ReleaseSpinLock(&var_lock);
+ }
+ 
++STATIC
++EFI_STATUS
++read_feature_flags()
++{
++  /* Check for magic value before parsing the flags */
++  UINT32 value = read_interface ();
++  struct feature_word *features = (struct feature_word *)&value;
++
++  if (features->magic_value != VAR_STORE_MAGIC_VALUE)
++    return EFI_UNSUPPORTED;
++
++  return EFI_SUCCESS;
++}
++
+ /**
+  * The user Entry Point for the external variable store driver.
+  *
+@@ -429,11 +456,6 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+   EFI_STATUS Status = EFI_SUCCESS;
+   EFI_EVENT ExitBootServiceEvent;
+ 
+-  comm_buf_phys = AllocateRuntimePages(SHMEM_PAGES);
+-  if (comm_buf_phys == NULL)
+-    return EFI_OUT_OF_RESOURCES;
+-  comm_buf = comm_buf_phys;
+-
+ #ifdef EXTVAR_MMIO_ADDRESS
+   Status = gDS->AddMemorySpace (
+       EfiGcdMemoryTypeMemoryMappedIo,
+@@ -448,6 +470,25 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+   ASSERT_EFI_ERROR (Status);
+ #endif
+ 
++  if (read_feature_flags() != EFI_SUCCESS)
++    return EFI_UNSUPPORTED;
++
++  comm_buf_phys = AllocateRuntimePages(SHMEM_PAGES);
++  if (comm_buf_phys == NULL)
++    return EFI_OUT_OF_RESOURCES;
++  comm_buf = comm_buf_phys;
++
++  /* Check if a driver already registered, that should not happen */
++  VOID *DummyProtocol;
++  Status = gBS->LocateProtocol (
++                &gEfiVariableArchProtocolGuid,
++                NULL,
++                (VOID **)&DummyProtocol);
++
++  /* Dead loop the CPU if another variable store is already registered */
++  if (Status == EFI_SUCCESS) {
++    CpuDeadLoop();
++  }
+   InitializeSpinLock(&var_lock);
+ 
+   // Taken from FSVariable.c
+diff --git a/nitro/ExtVarStore/interface.h b/nitro/ExtVarStore/interface.h
+index eee9ae5c65..87d3d8ae31 100644
+--- a/nitro/ExtVarStore/interface.h
++++ b/nitro/ExtVarStore/interface.h
+@@ -26,6 +26,16 @@ enum command_t {
+ 
+ #define VAR_STORE_VERSION 1
+ 
++/**
++ * Magic value that needs to be in sync with EDK2 var store.
++ */
++#define VAR_STORE_MAGIC_VALUE 0xec
++
++struct feature_word {
++  UINT8 magic_value;
++  UINT32 features:24;
++} _packed;
++
+ typedef struct {
+ 	CHAR8 *buf;
+ 	UINTN remaining;
