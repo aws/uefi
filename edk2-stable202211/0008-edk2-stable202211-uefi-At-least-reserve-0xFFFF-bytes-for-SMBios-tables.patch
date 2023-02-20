@@ -1,0 +1,41 @@
+From d6586de12373a42e860afa25147a1d66a672f2e3 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Tue, 6 Oct 2020 16:06:06 +0200
+Subject: [PATCH] uefi: At least reserve 0xFFFF bytes for SMBios tables
+
+We expect to soon have DMI v2 tables with longer SMBios tables. Allocate
+0xFFFF (maximum of SMBios 2 tables) bytes so that no further change of
+memory layout is necessary. This reduces the risk of hibernation
+failures.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+
+diff --git a/MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.c b/MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.c
+index 1d43adc766..8a392a8f56 100644
+--- a/MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.c
++++ b/MdeModulePkg/Universal/SmbiosDxe/SmbiosDxe.c
+@@ -1172,10 +1172,12 @@ SmbiosCreateTable (
+     }
+ 
+     PhysicalAddress = 0xffffffff;
++    // Allocate at least the 64 KiB
++    UINT32 AllocateSize = EntryPointStructure->TableLength <= 0xFFFF ? 0xFFFF : EntryPointStructure->TableLength;
+     Status          = gBS->AllocatePages (
+                              AllocateMaxAddress,
+                              EfiRuntimeServicesData,
+-                             EFI_SIZE_TO_PAGES (EntryPointStructure->TableLength),
++                             EFI_SIZE_TO_PAGES (AllocateSize),
+                              &PhysicalAddress
+                              );
+     if (EFI_ERROR (Status)) {
+@@ -1184,7 +1186,7 @@ SmbiosCreateTable (
+       return EFI_OUT_OF_RESOURCES;
+     } else {
+       EntryPointStructure->TableAddress = (UINT32)PhysicalAddress;
+-      mPreAllocatedPages                = EFI_SIZE_TO_PAGES (EntryPointStructure->TableLength);
++      mPreAllocatedPages                = EFI_SIZE_TO_PAGES (AllocateSize);
+     }
+   }
+ 

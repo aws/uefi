@@ -1,0 +1,117 @@
+From bc78135d35d2a275e6b8d8c0c1e3d6ca35fc9be9 Mon Sep 17 00:00:00 2001
+From: Razvan Ghitulete <rga@amazon.com>
+Date: Tue, 12 Jun 2018 08:26:55 -0500
+Subject: [PATCH] nitro: add build script
+
+In order to keep things as simple as possible, we create build.sh to
+interact with the build system.
+
+Signed-off-by: Razvan Ghitulete <rga@amazon.com>
+Signed-off-by: Peter Lawthers <lawthers@amazon.com>
+Signed-off-by: Julian Stecklina <jsteckli@amazon.de>
+Signed-off-by: David Woodhouse <dwmw@amazon.co.uk>
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Signed-off-by: Simon Veith <sveith@amazon.de>
+Signed-off-by: Sabin Rapan <sabrapan@amazon.com>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: Amadeusz Juskowiak <ajusk@amazon.de>
+Reviewed-by: Marius Hillenbrand <mhillenb@amazon.de>
+Reviewed-by: Norbert Manthey <nmanthey@amazon.de>
+Reviewed-by: Filippo Sironi <sironi@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Alexandru Ciobotaru <alcioa@amazon.com>
+Reviewed-by: Petre Eftime <epetre@amazon.com>
+Reviewed-by: Alexandru-Catalin Vasile <lexnv@amazon.com>
+CC: KarimAllah Raslan <karahmed@amazon.de>
+
+diff --git a/build.sh b/build.sh
+new file mode 100755
+index 0000000000..b7fc92bae7
+--- /dev/null
++++ b/build.sh
+@@ -0,0 +1,85 @@
++#!/bin/bash
++# Copyright 2018-2023 Amazon.com, Inc. or its affiliates. All Rights Reserved.
++set -e -o pipefail
++
++ARCH_TARGET="$1"
++
++# Check parameters
++SUPPORTED_ARCH="arm64 x86"
++if [[ ! " $SUPPORTED_ARCH " =~ .*\ $ARCH_TARGET\ .* ]]; then
++	echo "Usage: $0 <arch>"
++	echo "Supported architectures: ${SUPPORTED_ARCH[@]}"
++	exit 2
++fi
++
++SOURCE="${BASH_SOURCE[0]}"
++# resolve ${SOURCE} until the file is no longer a symlink
++SOURCE="$(readlink -e ${SOURCE})"
++DIR="$( cd -P "$( dirname ${SOURCE} )" && pwd )"
++PACKAGES_PATH=${PACKAGES_PATH:-$DIR}
++LOGFILE="uefi_build.log"
++
++cd ${DIR}
++
++TPUT="$([ -z "${TERM}" -o "${TERM}" = dumb ] && echo true || echo tput)"
++
++${TPUT} setaf 2
++echo "     BUILD  uefi"
++echo "      LOGS  ${DIR}/${LOGFILE}"
++${TPUT} sgr0
++
++unset MAKEFLAGS
++unset MAKELEVEL
++
++# You can never be too safe. Just set these vars to '' to make sure no unwanted side effects occur
++export CONF_PATH=''
++export EDK_TOOLS_PATH=''
++export WORKSPACE=''
++
++# Set SOURCE_DATE_EPOCH for reproducible builds (can be overriden)
++export SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-$(date --date='Nov 1 2018 09:00:00' +"%s")}
++
++if [ -n "$UEFI_DEBUG" ]; then
++	BUILD_TYPE="DEBUG"
++else
++	BUILD_TYPE="RELEASE"
++fi
++
++TOOLCHAIN="GCC5"
++
++#
++# build uefi in it's special build environment. This should be done last
++# since it modifies the build environment
++#
++build_uefi()
++{
++	# We only care about the latest build log so we just
++	# wipe everything that might be in the build log
++	echo "      MAKE  BaseTools"
++	make -C BaseTools &> "${LOGFILE}"
++	source edksetup.sh >> "${LOGFILE}"
++
++	if [ "$ARCH_TARGET" = "x86" ]; then
++	    # Build OVMF for booting x86_64 Nitro Guests
++	    echo "     BUILD  OvmfPkg"
++
++	    defines="${defines} -DTPM_ENABLE=TRUE"
++	    [ -n "$UEFI_DEBUG" ] && defines="${defines} -DDEBUG_ON_SERIAL_PORT"
++
++	    build -a X64 -t $TOOLCHAIN -b $BUILD_TYPE --hash -p OvmfPkg/OvmfPkgX64.dsc ${defines} >> "${LOGFILE}"
++	    cp Build/OvmfX64/${BUILD_TYPE}_${TOOLCHAIN}/FV/OVMF.fd ovmf_img.fd
++
++	elif [ "$ARCH_TARGET" = "arm64" ]; then
++	    # Build ArmvirtQemuKernel, passed to Nitro Guests
++	    echo "     BUILD  ArmVirtQemuKernel"
++	    build -a AARCH64 -t $TOOLCHAIN -b $BUILD_TYPE --hash -p ArmVirtPkg/ArmVirtQemuKernel.dsc >> "${LOGFILE}"
++	    cp Build/ArmVirtQemuKernel-AARCH64/${BUILD_TYPE}_${TOOLCHAIN}/FV/QEMU_EFI.fd uefi_img.fd
++
++	else
++	    echo "ERROR: Unknown UEFI build target ${ARCH_TARGET}"
++	    exit 1
++	fi
++}
++
++build_uefi
++

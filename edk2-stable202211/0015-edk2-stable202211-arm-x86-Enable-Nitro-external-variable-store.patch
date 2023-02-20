@@ -1,0 +1,29 @@
+From b8f386feb2a9492480214d79074768dde855da57 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Thu, 24 Jun 2021 12:16:06 +0200
+Subject: [PATCH] arm/x86: Enable Nitro external variable store
+
+Start including the Nitro-based variable store that is able to
+persist variables.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Sebastian Ott <sebott@amazon.de>
+
+diff --git a/OvmfPkg/OvmfPkgX64.dsc b/OvmfPkg/OvmfPkgX64.dsc
+index 1b3540a86b..190505ba3a 100644
+--- a/OvmfPkg/OvmfPkgX64.dsc
++++ b/OvmfPkg/OvmfPkgX64.dsc
+@@ -29,10 +29,10 @@
+   # Defines for default states.  These can be changed on the command line.
+   # -D FLAG=VALUE
+   #
+-  DEFINE SECURE_BOOT_ENABLE      = FALSE
++  DEFINE SECURE_BOOT_ENABLE      = TRUE
+   DEFINE SMM_REQUIRE             = FALSE
+   DEFINE SOURCE_DEBUG_ENABLE     = FALSE
+-  DEFINE EXTERNAL_VARIABLE_STORE = FALSE
++  DEFINE EXTERNAL_VARIABLE_STORE = TRUE
+ 
+ !include OvmfPkg/OvmfTpmDefines.dsc.inc
+ 

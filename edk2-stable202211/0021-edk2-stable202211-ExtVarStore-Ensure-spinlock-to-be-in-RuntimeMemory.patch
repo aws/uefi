@@ -1,0 +1,187 @@
+From 9c224365f3dbd55bd543fe49a7666d74477348ac Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Johanna=20Am=C3=A9lie=20Schander?= <mimoja@amazon.de>
+Date: Wed, 11 May 2022 18:08:08 +0200
+Subject: [PATCH] ExtVarStore: Ensure spinlock to be in RuntimeMemory
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+So far we have stored the var_lock spinlock in the RT_CODE section.
+This now leads to issues with operating systems where the EFIs RT_CODE section
+is mapped read-only (as it should) resulting in access violations if
+the spinlock is aquired.
+
+These access violations are not recoverable by an generic (aka non-amazon aware)
+kernel leading to kernel crashes and failed boots.
+
+We therefore ensure the spinlock is stored in the RT_DATA section where it should
+have been from the beginning.
+
+CC: Hendrik Borghorst <hborghor@amazon.com>
+Signed-off-by: Johanna Amélie Schander <mimoja@amazon.de>
+Signed-off-by: Alex Graf  <graf@amazon.com>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+
+Upstream-status: Not applicable
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index 0b4aa0a07f..03a7d0896c 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -41,7 +41,7 @@ static EFI_EVENT mExtVirtualAddressChangeEvent = NULL;
+ static UINTN mExtVarMMIO = EXTVAR_MMIO_ADDRESS;
+ #endif
+ 
+-static SPIN_LOCK var_lock;
++static SPIN_LOCK *var_lock;
+ 
+ static VOID *comm_buf_phys;
+ VOID *comm_buf;
+@@ -95,7 +95,7 @@ ExtGetVariable (
+     return EFI_NOT_FOUND;
+   }
+ 
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+ 
+   uefi_param_buf buf = {
+     .buf = comm_buf,
+@@ -150,7 +150,7 @@ ExtGetVariable (
+   }
+ 
+ out:
+-  ReleaseSpinLock(&var_lock);
++  ReleaseSpinLock(var_lock);
+ 
+   /* Deserialization failure */
+   if (rc != EFI_SUCCESS) {
+@@ -191,7 +191,7 @@ ExtGetNextVariableName (
+   if (StrSize(VariableName) > *VariableNameSize)
+       return EFI_INVALID_PARAMETER;
+ 
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+ 
+   rc = serialize_uint32(&writer, VAR_STORE_VERSION);
+   rc |= serialize_command(&writer, COMMAND_GET_NEXT_VARIABLE);
+@@ -230,7 +230,7 @@ ExtGetNextVariableName (
+   }
+ 
+ out:
+-  ReleaseSpinLock(&var_lock);
++  ReleaseSpinLock(var_lock);
+ 
+   /* Deserialization failure */
+   if (rc != EFI_SUCCESS) {
+@@ -276,7 +276,7 @@ ExtSetVariable (
+     .buf = buf,
+   };
+ 
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+ 
+   rc = serialize_uint32(&writer, VAR_STORE_VERSION);
+   rc |= serialize_command(&writer, COMMAND_SET_VARIABLE);
+@@ -287,7 +287,7 @@ ExtSetVariable (
+ 
+   /* Serialization failure */
+   if (rc != EFI_SUCCESS) {
+-    ReleaseSpinLock(&var_lock);
++    ReleaseSpinLock(var_lock);
+     return EFI_DEVICE_ERROR;
+   }
+ 
+@@ -295,7 +295,7 @@ ExtSetVariable (
+ 
+   rc = unserialize_result(&parser, &status);
+ 
+-  ReleaseSpinLock(&var_lock);
++  ReleaseSpinLock(var_lock);
+ 
+   /* Deserialization failure */
+   if (rc != EFI_SUCCESS) {
+@@ -332,7 +332,7 @@ ExtQueryVariableInfo (
+     .buf = buf,
+   };
+ 
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+ 
+   rc = serialize_uint32(&writer, VAR_STORE_VERSION);
+   rc |= serialize_command(&writer, COMMAND_QUERY_VARIABLE_INFO);
+@@ -359,7 +359,7 @@ ExtQueryVariableInfo (
+   }
+ 
+ out:
+-  ReleaseSpinLock(&var_lock);
++  ReleaseSpinLock(var_lock);
+ 
+   /* Deserialization failure */
+   if (rc != EFI_SUCCESS) {
+@@ -387,21 +387,21 @@ OnExitBootServices (
+     .buf = buf,
+   };
+ 
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+ 
+   rc = serialize_uint32(&writer, VAR_STORE_VERSION);
+   rc |= serialize_command(&writer, COMMAND_ENTER_RUNTIME);
+ 
+   /* Serialization failure */
+   if (rc != EFI_SUCCESS) {
+-    ReleaseSpinLock(&var_lock);
++    ReleaseSpinLock(var_lock);
+     return;
+   }
+ 
+   // We dont care about the return value, we cannot do anything with it anyways
+   exec_command(comm_buf_phys);
+ 
+-  ReleaseSpinLock(&var_lock);
++  ReleaseSpinLock(var_lock);
+ }
+ 
+ 
+@@ -413,7 +413,7 @@ VariableClassAddressChangeEvent (
+   IN VOID             *Context
+   )
+ {
+-  AcquireSpinLock(&var_lock);
++  AcquireSpinLock(var_lock);
+   /*
+    * Convert the comm_buf pointer from a physical to a virtual address for use
+    * at runtime.
+@@ -422,7 +422,10 @@ VariableClassAddressChangeEvent (
+ #ifdef EXTVAR_MMIO_ADDRESS
+   EfiConvertPointer (0x0, (VOID **) &mExtVarMMIO);
+ #endif
+-  ReleaseSpinLock(&var_lock);
++
++  ReleaseSpinLock(var_lock);
++
++  EfiConvertPointer (0x0, (VOID **) &var_lock);
+ }
+ 
+ STATIC
+@@ -478,6 +481,10 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+     return EFI_OUT_OF_RESOURCES;
+   comm_buf = comm_buf_phys;
+ 
++  var_lock = AllocateRuntimeZeroPool(sizeof(*var_lock));
++  if (var_lock == NULL)
++    return EFI_OUT_OF_RESOURCES;
++
+   /* Check if a driver already registered, that should not happen */
+   VOID *DummyProtocol;
+   Status = gBS->LocateProtocol (
+@@ -489,7 +496,7 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+   if (Status == EFI_SUCCESS) {
+     CpuDeadLoop();
+   }
+-  InitializeSpinLock(&var_lock);
++  InitializeSpinLock(var_lock);
+ 
+   // Taken from FSVariable.c
+   SystemTable->RuntimeServices->GetVariable         = ExtGetVariable;

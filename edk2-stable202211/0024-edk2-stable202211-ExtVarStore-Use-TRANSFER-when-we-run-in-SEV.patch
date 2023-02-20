@@ -1,0 +1,99 @@
+From 691639a27469688573a800aa75da7f17b2fbd3dd Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Tue, 7 Feb 2023 12:53:07 +0000
+Subject: [PATCH] ExtVarStore: Use TRANSFER when we run in SEV
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When we run in SEV-SNP, we can not rely on a shared memory buffer for
+host and guest communication. In that case, let's fall back to the newly
+introduced TRANSFER mode that allows us to serialize the UEFI requests
+through a non-RAM protocol.
+
+Upstream-status: Not applicable
+
+Signed-off-by: Alexander Graf <graf@amazon.com>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Johanna 'Mimoja' Amélie Schander <mimoja@amazon.de>
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index d1305254a8..bcac0eb979 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -12,6 +12,10 @@
+ #include <Library/UefiLib.h>
+ #include <Library/SynchronizationLib.h>
+ 
++#ifdef MDE_CPU_X64
++#include <Library/MemEncryptSevLib.h>
++#endif
++
+ #include <Library/DxeServicesTableLib.h>
+ #include <Library/UefiBootServicesTableLib.h>
+ 
+@@ -523,11 +527,10 @@ VariableClassAddressChangeEvent (
+ 
+ STATIC
+ EFI_STATUS
+-read_feature_flags()
++read_feature_flags(struct feature_word *features)
+ {
+   /* Check for magic value before parsing the flags */
+-  UINT32 value = read_interface ();
+-  struct feature_word *features = (struct feature_word *)&value;
++  *(UINT32 *)features = read_interface ();
+ 
+   if (features->magic_value != VAR_STORE_MAGIC_VALUE)
+     return EFI_UNSUPPORTED;
+@@ -551,6 +554,7 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+ {
+   EFI_STATUS Status = EFI_SUCCESS;
+   EFI_EVENT ExitBootServiceEvent;
++  struct feature_word features = {};
+ 
+ #ifdef EXTVAR_MMIO_ADDRESS
+   Status = gDS->AddMemorySpace (
+@@ -566,7 +570,7 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+   ASSERT_EFI_ERROR (Status);
+ #endif
+ 
+-  if (read_feature_flags() != EFI_SUCCESS)
++  if (read_feature_flags(&features) != EFI_SUCCESS)
+     return EFI_UNSUPPORTED;
+ 
+   comm_buf_phys = AllocateRuntimePages(SHMEM_PAGES);
+@@ -574,6 +578,13 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+     return EFI_OUT_OF_RESOURCES;
+   comm_buf = comm_buf_phys;
+ 
++#ifdef MDE_CPU_X64
++  if (MemEncryptSevIsEnabled () &&
++      (features.features & FEATURE_CRC32) &&
++      (features.features & FEATURE_TRANSFER))
++    bounceData = TRUE;
++#endif
++
+   var_lock = AllocateRuntimeZeroPool(sizeof(*var_lock));
+   if (var_lock == NULL)
+     return EFI_OUT_OF_RESOURCES;
+diff --git a/nitro/ExtVarStore/ExtVarStore.inf b/nitro/ExtVarStore/ExtVarStore.inf
+index 09c75ee5dd..c614591ed9 100644
+--- a/nitro/ExtVarStore/ExtVarStore.inf
++++ b/nitro/ExtVarStore/ExtVarStore.inf
+@@ -22,6 +22,7 @@
+ [Packages]
+   MdePkg/MdePkg.dec
+   MdeModulePkg/MdeModulePkg.dec
++  OvmfPkg/OvmfPkg.dec
+ 
+ [LibraryClasses]
+   PcdLib
+@@ -41,6 +42,7 @@
+ 
+ [LibraryClasses.X64]
+   PciLib
++  MemEncryptSevLib
+ 
+ [Guids]
+   gEfiEventExitBootServicesGuid                 ## CONSUMES ## Event

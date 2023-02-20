@@ -1,0 +1,33 @@
+From d373f86a6a40a6293825ddec10a607e9a1e6d288 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Fri, 16 Oct 2020 10:05:08 +0200
+Subject: [PATCH] uefi: Wipe emulated NvVariable memory on allocation
+
+EDK2 implements an emulation of non-volatile memory by keeping the data
+persistent over reboots. For now we don't want to persist data and
+provide a solution that is inline with the in-memory store of the .metal
+instances.
+
+This way we don't have to return EFI_UNSUPPORTED on SetVariable runtime
+service. This turned out to cause problems with Linux distribution's
+update routings (efibootmgr failing).
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+
+diff --git a/OvmfPkg/Library/PlatformInitLib/Platform.c b/OvmfPkg/Library/PlatformInitLib/Platform.c
+index 2582689ffe..7b0a98cf24 100644
+--- a/OvmfPkg/Library/PlatformInitLib/Platform.c
++++ b/OvmfPkg/Library/PlatformInitLib/Platform.c
+@@ -767,6 +767,10 @@ PlatformReserveEmuVariableNvStore (
+     VarStoreSize / 1024
+     ));
+ 
++  // Clean variable space for now, as we don't want to persist variables over reboot
++  if (VariableStore != NULL)
++    SetMem((VOID *)VariableStore, VarStoreSize, 0x0);
++
+   return VariableStore;
+ }
+ 

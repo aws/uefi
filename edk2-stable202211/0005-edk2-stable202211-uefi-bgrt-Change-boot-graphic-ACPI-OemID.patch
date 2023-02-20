@@ -1,0 +1,102 @@
+From 2aaa3fea5161b1b16bf53cf6c0ef0cb478b720a3 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Thu, 15 Oct 2020 13:50:24 +0200
+Subject: [PATCH] uefi/bgrt: Change boot graphic, ACPI OemID
+
+On top of the logo change, also change the OemId and OemTableId.
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Jinank Jain <jinankj@amazon.de>
+
+diff --git a/MdeModulePkg/Logo/Logo.bmp b/MdeModulePkg/Logo/Logo.bmp
+index 3e85229e17595ba1f9c59e13692a4f8362ebc850..2be78fe556f43d3831b6d738ba3fb5c3c64df9e4 100644
+GIT binary patch
+literal 2898
+zcmZ?r4dP}1gDxOh1H^Jr%*Y@C7C*toz%Z8ug24h{;y(ie1c7-@?m@)}IpSDM#3>t9
+eH5vk=Aut*OqaiRF0;3@?8UmvsFd71bIs^cm`3R{1
+
+literal 12446
+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
+
+diff --git a/MdeModulePkg/MdeModulePkg.dec b/MdeModulePkg/MdeModulePkg.dec
+index 58e6ab0048..b2b46546bd 100644
+--- a/MdeModulePkg/MdeModulePkg.dec
++++ b/MdeModulePkg/MdeModulePkg.dec
+@@ -1950,7 +1950,7 @@
+ 
+   ## Default OEM ID for ACPI table creation, its length must be 0x6 bytes to follow ACPI specification.
+   # @Prompt Default OEM ID for ACPI table creation.
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemId|"INTEL "|VOID*|0x30001034
++  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemId|"AMAZON"|VOID*|0x30001034
+ 
+   ## Default OEM Table ID for ACPI table creation, it is "EDK2    ".
+   #  According to ACPI specification, this field is particularly useful when
+@@ -1958,7 +1958,7 @@
+   #  The OEM assigns each dissimilar table a new OEM Table ID.
+   #  This PCD is ignored for definition block.
+   # @Prompt Default OEM Table ID for ACPI table creation.
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x20202020324B4445|UINT64|0x30001035
++  gEfiMdeModulePkgTokenSpaceGuid.PcdAcpiDefaultOemTableId|0x20204E4F5A414D41|UINT64|0x30001035
+ 
+   ## Default OEM Revision for ACPI table creation.
+   #  According to ACPI specification, for LoadTable() opcode, the OS can also

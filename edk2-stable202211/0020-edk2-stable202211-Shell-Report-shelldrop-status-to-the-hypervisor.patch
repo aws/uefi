@@ -1,0 +1,49 @@
+From 101110a81fe43ccb59ece5af122bc7c5296efc8b Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Johanna=20Am=C3=A9lie=20Schander?= <mimoja@amazon.de>
+Date: Wed, 13 Apr 2022 13:20:15 +0200
+Subject: [PATCH] Shell: Report shelldrop status to the hypervisor
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+When we drop into a shell (becuase of a configuration issue which might be
+caused by a potential regression) we do not have any insights into it.
+By introducing "X-Nitro-ShellDrop" we are not able to pass the reason for the
+shell drop to allow for a metric on it.
+
+Signed-off-by: Johanna Amélie Schander <mimoja@amazon.de>
+Upstream-status: Not applicable
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+
+diff --git a/ShellPkg/Application/Shell/Shell.c b/ShellPkg/Application/Shell/Shell.c
+index df00adfdfa..8ee92db1fd 100644
+--- a/ShellPkg/Application/Shell/Shell.c
++++ b/ShellPkg/Application/Shell/Shell.c
+@@ -624,6 +624,13 @@ UefiMain (
+         Status = DoStartupScript (ShellInfoObject.ImageDevPath, ShellInfoObject.FileDevPath);
+       }
+ 
++      CHAR16 *shellstatus = L"Shell";
++      gRT->SetVariable((CHAR16*)L"X-Nitro-ShellDrop",                   \
++        &gShellVariableGuid,                                            \
++        EFI_VARIABLE_NON_VOLATILE|EFI_VARIABLE_BOOTSERVICE_ACCESS,      \
++        StrLen(shellstatus) * 2,                                     \
++        (VOID*) shellstatus);
++
+       if (!ShellInfoObject.ShellInitSettings.BitUnion.Bits.Exit && !ShellCommandGetExit () && ((PcdGet8 (PcdShellSupportLevel) >= 3) || PcdGetBool (PcdShellForceConsole)) && !EFI_ERROR (Status) && !ShellInfoObject.ShellInitSettings.BitUnion.Bits.NoConsoleIn) {
+         //
+         // begin the UI waiting loop
+@@ -1371,6 +1378,12 @@ DoStartupScript (
+ 
+   FileStringPath = LocateStartupScript (ImagePath, FilePath);
+   if (FileStringPath != NULL) {
++    // We don't introduce an enum in case a customer ever wants to see the data
++    gRT->SetVariable((CHAR16*)L"X-Nitro-ShellDrop",                   \
++      &gShellVariableGuid,                                            \
++      EFI_VARIABLE_NON_VOLATILE|EFI_VARIABLE_BOOTSERVICE_ACCESS,      \
++      StrLen(mStartupScript) * 2,                                     \
++      (VOID*) mStartupScript);
+     FullFileStringPath = FullyQualifyPath (FileStringPath);
+     if (FullFileStringPath == NULL) {
+       Status = RunScriptFile (FileStringPath, NULL, FileStringPath, ShellInfoObject.NewShellParametersProtocol);

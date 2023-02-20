@@ -1,0 +1,42 @@
+From fb18a9de632e94ed7f62ff225741b82a78bac738 Mon Sep 17 00:00:00 2001
+From: Alexander Graf <graf@amazon.com>
+Date: Tue, 7 Feb 2023 14:45:45 +0000
+Subject: [PATCH] ExtVarStore: Add hook to force enable TRANSFER
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+We want to give other modules the ability to switch to TRANSFER mode if
+they detect that we are not running in an environment that is compatible
+with the shared physical page concept. Let's add a special variable
+called "X-Nitro-Force-TRANSFER" that when set toggles the system wide
+mode to TRANSFER based.
+
+Upstream-status: Not applicable
+
+Signed-off-by: Alexander Graf <graf@amazon.com>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Johanna 'Mimoja' Amélie Schander <mimoja@amazon.de>
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index bcac0eb979..f8924fd765 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -360,6 +360,17 @@ ExtSetVariable (
+   if (VariableName[0] == '\0')
+     return EFI_INVALID_PARAMETER;
+ 
++  /* Magic key to enable TRANSFER based transport */
++  if (StrCmp(VariableName, L"X-Nitro-Force-TRANSFER") == 0) {
++    struct feature_word features = {};
++
++    if ((read_feature_flags(&features) == EFI_SUCCESS) &&
++        (features.features & FEATURE_CRC32) &&
++        (features.features & FEATURE_TRANSFER)) {
++      bounceData = TRUE;
++    }
++  }
++
+   uefi_param_buf buf = {
+     .buf = comm_buf,
+     .remaining = SHMEM_PAGES * EFI_PAGE_SIZE,

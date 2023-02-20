@@ -1,0 +1,30 @@
+From c909f38f074b191f310444041c940227b8dfc437 Mon Sep 17 00:00:00 2001
+From: Hendrik Borghorst <hborghor@amazon.de>
+Date: Thu, 29 Sep 2022 15:15:56 +0000
+Subject: [PATCH] UEFI/NVMe: Increase NVMe generic timeout to 5 minutes
+
+Sometimes EBS servers might time out if the timeout value is too low. To
+put our UEFI guest firmware in sync with legacy BIOS increase the limit to
+5 minutes.
+
+Upstream-status: Not applicable
+
+Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Anselm Busse <abusse@amazon.de>
+Reviewed-by: Petre Eftime <epetre@amazon.com>
+Reviewed-by: Ilias Stamatis <ilstam@amazon.co.uk>
+Reviewed-by: Simon Veith <sveith@amazon.de>
+
+diff --git a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpress.h b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpress.h
+index 4c26b2e1b4..059c6a171a 100644
+--- a/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpress.h
++++ b/MdeModulePkg/Bus/Pci/NvmExpressDxe/NvmExpress.h
+@@ -80,7 +80,7 @@ extern EFI_DRIVER_SUPPORTED_EFI_VERSION_PROTOCOL  gNvmExpressDriverSupportedEfiV
+ //
+ // Time out value for Nvme transaction execution
+ //
+-#define NVME_GENERIC_TIMEOUT  EFI_TIMER_PERIOD_SECONDS (5)
++#define NVME_GENERIC_TIMEOUT  EFI_TIMER_PERIOD_SECONDS (5 * 60)
+ 
+ //
+ // Nvme async transfer timer interval, set by experience.

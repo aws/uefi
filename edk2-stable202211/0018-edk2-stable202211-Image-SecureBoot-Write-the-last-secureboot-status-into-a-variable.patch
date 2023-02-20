@@ -1,0 +1,70 @@
+From 41dd109a520c96d11652cf1c0e05c2aa02632452 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Johanna=20Am=C3=A9lie=20Schander?= <mimoja@amazon.de>
+Date: Thu, 23 Sep 2021 16:48:04 +0200
+Subject: [PATCH] Image/SecureBoot: Write the last secureboot status into a
+ variable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Right now we do not get notified if the guest fails to boot an image,
+to change this we are extending the interface between the varstore
+implementation and EDK2.
+
+Due to the package system of EDK2 we cannot easily call the ExtVarStore
+directly on ABI level. The alternative of extending the SystemTables
+RuntimeSerices would expose the functionality directly to the guest
+which might not be able to use it properly. While there is an EDK2
+extension to the RuntimeTables the effort outweights the benefits here.
+We are therefore creating a new Variable with the latest Image loading
+result.
+
+Upstream-status:
+Not posting upstream as the solution is custom tailored to the nitro
+variable store whichout this commit is worthless. The upstreamable
+solution would be to use the EDK2 reuntime table extensions which is
+not done here as explained in the commit itself.
+
+Signed-off-by: Johanna Amélie Schander <mimoja@amazon.de>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Saurav Sachidanand <sauravsc@amazon.de>
+
+diff --git a/MdeModulePkg/Core/Dxe/Image/Image.c b/MdeModulePkg/Core/Dxe/Image/Image.c
+index 06cc6744b8..ed1e883883 100644
+--- a/MdeModulePkg/Core/Dxe/Image/Image.c
++++ b/MdeModulePkg/Core/Dxe/Image/Image.c
+@@ -1089,6 +1089,25 @@ CoreUnloadAndCloseImage (
+   CoreFreePool (Image);
+ }
+ 
++/**
++ * Notify the variable store about issues with the boot image
++ * 
++ */
++static
++EFI_STATUS
++NotifySecureBootStatus(EFI_STATUS status)
++{
++  EFI_STATUS res = gDxeCoreRT->SetVariable(
++                          L"X-Nitro-SecurebootStatus",
++                          &gEfiGlobalVariableGuid,
++                          EFI_VARIABLE_BOOTSERVICE_ACCESS | EFI_VARIABLE_RUNTIME_ACCESS,
++                          sizeof(status),
++                          (VOID *) &status
++                          );
++
++  return res;
++}
++
+ /**
+   Loads an EFI image into memory and returns a handle to the image.
+ 
+@@ -1304,6 +1323,8 @@ CoreLoadImageCommon (
+                                   );
+   }
+ 
++  NotifySecureBootStatus(SecurityStatus);
++
+   //
+   // Check Security Status.
+   //
