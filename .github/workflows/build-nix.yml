@@ -1,0 +1,24 @@
+name: build-nix
+run-name: UEFI build - Nix
+
+on:
+  push:
+    paths-ignore:
+      - 'version'
+      - '*.md'
+      - '.github/workflows/release.yml'
+
+jobs:
+  build_changes:
+    name: build_changes
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: install nix
+        uses: cachix/install-nix-action@v20
+      - name: build artifacts
+        run: nix-build --pure
