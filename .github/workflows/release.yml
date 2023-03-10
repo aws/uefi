@@ -1,0 +1,43 @@
+name: release
+run-name: UEFI release
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - 'version'
+
+jobs:
+  build_release:
+    name: build_release
+    permissions: write-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+      - name: install nix
+        uses: cachix/install-nix-action@v20
+      - name: build artifacts
+        run: nix-build --pure
+      - name: version
+        run: echo "version=$(cat version)" >> $GITHUB_ENV
+        id: version
+      - name: changelog
+        run: |
+          csplit -s CHANGELOG.md "/##/" {1}
+          tail -n +3 xx01 > CHANGELOG.tmp
+        id: changelog
+      - name: release
+        uses: softprops/action-gh-release@v0.1.15
+        id: create_release
+        with:
+          draft: false
+          prerelease: false
+          tag_name: ${{ env.version }}
+          body_path: CHANGELOG.tmp
+          files: ./result/ovmf_img.fd
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
