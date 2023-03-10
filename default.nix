@@ -51,6 +51,7 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0023-edk2-stable202211-ExtVarStore-Add-support-for-PIO-transfer.patch
     ./edk2-stable202211/0024-edk2-stable202211-ExtVarStore-Use-TRANSFER-when-we-run-in-SEV.patch
     ./edk2-stable202211/0025-edk2-stable202211-ExtVarStore-Add-hook-to-force-enable-TRANSFER.patch
+    ./edk2-stable202211/9001-Remove-Wno-format-compiling-flag-for-Openssl-files.patch
   ];
 
   patchPhase = ''
