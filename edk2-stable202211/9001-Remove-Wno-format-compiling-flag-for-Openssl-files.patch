@@ -1,0 +1,108 @@
+From 34f86132b722073ec1e1f2a2a8879e8a69f1b0ee Mon Sep 17 00:00:00 2001
+From: Costin Lupu <lvpv@amazon.com>
+Date: Wed, 15 Mar 2023 19:10:52 +0000
+Subject: [PATCH] Remove -Wno-format compiling flag for Openssl files
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Fix for avoiding: "‘-Wformat-security’ ignored without ‘-Wformat’" error.
+
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+---
+ CryptoPkg/Library/OpensslLib/OpensslLib.inf          | 8 ++++----
+ CryptoPkg/Library/OpensslLib/OpensslLibAccel.inf     | 2 +-
+ CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf    | 8 ++++----
+ CryptoPkg/Library/OpensslLib/OpensslLibFull.inf      | 8 ++++----
+ CryptoPkg/Library/OpensslLib/OpensslLibFullAccel.inf | 2 +-
+ 5 files changed, 14 insertions(+), 14 deletions(-)
+
+diff --git a/CryptoPkg/Library/OpensslLib/OpensslLib.inf b/CryptoPkg/Library/OpensslLib/OpensslLib.inf
+index 60c6c24b..5727ffd9 100644
+--- a/CryptoPkg/Library/OpensslLib/OpensslLib.inf
++++ b/CryptoPkg/Library/OpensslLib/OpensslLib.inf
+@@ -633,11 +633,11 @@
+   #   -Werror=unused-but-set-variable: Warn whenever a local variable is assigned to, but otherwise unused (aside from its declaration).
+   #
+   GCC:*_*_IA32_CC_FLAGS    = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
++  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
+   GCC:*_*_ARM_CC_FLAGS     = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable -Wno-error=format
+-  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
+-  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
++  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable -Wno-error=format
++  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
++  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+   GCC:*_CLANG35_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANG38_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANGPDB_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized -Wno-error=incompatible-pointer-types -Wno-error=pointer-sign -Wno-error=implicit-function-declaration -Wno-error=ignored-pragma-optimize
+diff --git a/CryptoPkg/Library/OpensslLib/OpensslLibAccel.inf b/CryptoPkg/Library/OpensslLib/OpensslLibAccel.inf
+index 103ef7bd..16429590 100644
+--- a/CryptoPkg/Library/OpensslLib/OpensslLibAccel.inf
++++ b/CryptoPkg/Library/OpensslLib/OpensslLibAccel.inf
+@@ -685,7 +685,7 @@
+   #   -Werror=unused-but-set-variable: Warn whenever a local variable is assigned to, but otherwise unused (aside from its declaration).
+   #
+   GCC:*_*_IA32_CC_FLAGS    = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
++  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
+   GCC:*_CLANG35_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANG38_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANGPDB_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized -Wno-error=incompatible-pointer-types -Wno-error=pointer-sign -Wno-error=implicit-function-declaration -Wno-error=ignored-pragma-optimize
+diff --git a/CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf b/CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
+index c4eaea88..334bd27a 100644
+--- a/CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
++++ b/CryptoPkg/Library/OpensslLib/OpensslLibCrypto.inf
+@@ -583,11 +583,11 @@
+   #   -Werror=unused-but-set-variable: Warn whenever a local variable is assigned to, but otherwise unused (aside from its declaration).
+   #
+   GCC:*_*_IA32_CC_FLAGS    = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
++  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
+   GCC:*_*_ARM_CC_FLAGS     = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable -Wno-error=format
+-  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
+-  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
++  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable -Wno-error=format
++  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
++  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+   GCC:*_CLANG35_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANG38_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANGPDB_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized -Wno-error=incompatible-pointer-types -Wno-error=pointer-sign -Wno-error=implicit-function-declaration -Wno-error=ignored-pragma-optimize
+diff --git a/CryptoPkg/Library/OpensslLib/OpensslLibFull.inf b/CryptoPkg/Library/OpensslLib/OpensslLibFull.inf
+index 309e4305..8408b78c 100644
+--- a/CryptoPkg/Library/OpensslLib/OpensslLibFull.inf
++++ b/CryptoPkg/Library/OpensslLib/OpensslLibFull.inf
+@@ -688,11 +688,11 @@
+   #   -Werror=unused-but-set-variable: Warn whenever a local variable is assigned to, but otherwise unused (aside from its declaration).
+   #
+   GCC:*_*_IA32_CC_FLAGS    = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
++  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
+   GCC:*_*_ARM_CC_FLAGS     = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable -Wno-error=format
+-  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
+-  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-format -Wno-error=unused-but-set-variable
++  GCC:*_*_AARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable -Wno-error=format
++  GCC:*_*_RISCV64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
++  GCC:*_*_LOONGARCH64_CC_FLAGS = $(OPENSSL_FLAGS) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+   GCC:*_CLANG35_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANG38_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANGPDB_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized -Wno-error=incompatible-pointer-types -Wno-error=pointer-sign -Wno-error=implicit-function-declaration -Wno-error=ignored-pragma-optimize
+diff --git a/CryptoPkg/Library/OpensslLib/OpensslLibFullAccel.inf b/CryptoPkg/Library/OpensslLib/OpensslLibFullAccel.inf
+index 4eeeeb79..a93d4d45 100644
+--- a/CryptoPkg/Library/OpensslLib/OpensslLibFullAccel.inf
++++ b/CryptoPkg/Library/OpensslLib/OpensslLibFullAccel.inf
+@@ -740,7 +740,7 @@
+   #   -Werror=unused-but-set-variable: Warn whenever a local variable is assigned to, but otherwise unused (aside from its declaration).
+   #
+   GCC:*_*_IA32_CC_FLAGS    = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=unused-but-set-variable
+-  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
++  GCC:*_*_X64_CC_FLAGS     = -U_WIN32 -U_WIN64 $(OPENSSL_FLAGS) $(OPENSSL_FLAGS_CONFIG) -Wno-error=maybe-uninitialized -Wno-error=format -Wno-error=unused-but-set-variable -DNO_MSABI_VA_FUNCS
+   GCC:*_CLANG35_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANG38_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized
+   GCC:*_CLANGPDB_*_CC_FLAGS = -std=c99 -Wno-error=uninitialized -Wno-error=incompatible-pointer-types -Wno-error=pointer-sign -Wno-error=implicit-function-declaration -Wno-error=ignored-pragma-optimize
+-- 
+2.34.1
+
