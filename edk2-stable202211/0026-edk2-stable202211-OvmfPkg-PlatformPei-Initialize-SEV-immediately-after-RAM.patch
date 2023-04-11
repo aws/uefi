@@ -1,0 +1,43 @@
+From 16e5f23ef4f671fe08078b13d84b902f03116fae Mon Sep 17 00:00:00 2001
+From: Sabin Rapan <sabrapan@amazon.com>
+Date: Tue, 11 Apr 2023 10:22:44 +0000
+Subject: [PATCH] OvmfPkg/PlatformPei: Initialize variable store after SEV
+
+PlatformInitEmuVariableNvStore allocates runtime memory and writes to
+it. The runtime memory will be allocated from one of the regions read
+from e820.
+
+Under SEV-SNP, RAM regions have to be made private and pvalidated before
+access, otherwise the CPU incorrectly handles the access resulting in a
+crash.
+
+Move ReserveEmuVariableNvStore() after AmdSevInitialize().
+
+Signed-off-by: Sabin Rapan <sabrapan@amazon.com>
+
+diff --git a/OvmfPkg/PlatformPei/Platform.c b/OvmfPkg/PlatformPei/Platform.c
+index b1f8140d60..478066d43e 100644
+--- a/OvmfPkg/PlatformPei/Platform.c
++++ b/OvmfPkg/PlatformPei/Platform.c
+@@ -368,10 +368,6 @@ InitializePlatform (
+   InitializeRamRegions (&mPlatformInfoHob);
+ 
+   if (mPlatformInfoHob.BootMode != BOOT_ON_S3_RESUME) {
+-    if (!mPlatformInfoHob.SmmSmramRequire) {
+-      ReserveEmuVariableNvStore ();
+-    }
+-
+     PeiFvInitialization ();
+     MemTypeInfoInitialization ();
+     MemMapInitialization (&mPlatformInfoHob);
+@@ -380,6 +376,10 @@ InitializePlatform (
+ 
+   InstallClearCacheCallback ();
+   AmdSevInitialize ();
++  if (mPlatformInfoHob.BootMode != BOOT_ON_S3_RESUME &&
++      !mPlatformInfoHob.SmmSmramRequire) {
++    ReserveEmuVariableNvStore ();
++  }
+   if (mPlatformInfoHob.HostBridgeDevId == 0xffff) {
+     MiscInitializationForMicrovm (&mPlatformInfoHob);
+   } else {
