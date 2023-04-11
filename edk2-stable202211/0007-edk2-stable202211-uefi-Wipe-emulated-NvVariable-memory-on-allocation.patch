@@ -1,4 +1,4 @@
-From d373f86a6a40a6293825ddec10a607e9a1e6d288 Mon Sep 17 00:00:00 2001
+From ffee5bbcf23c264483b9d4091d96c3c8421fd2a7 Mon Sep 17 00:00:00 2001
 From: Hendrik Borghorst <hborghor@amazon.de>
 Date: Fri, 16 Oct 2020 10:05:08 +0200
 Subject: [PATCH] uefi: Wipe emulated NvVariable memory on allocation
@@ -16,18 +16,28 @@ Signed-off-by: Hendrik Borghorst <hborghor@amazon.de>
 Reviewed-by: Evgeny Iakovlev <eyakovl@amazon.de>
 Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
 
-diff --git a/OvmfPkg/Library/PlatformInitLib/Platform.c b/OvmfPkg/Library/PlatformInitLib/Platform.c
-index 2582689ffe..7b0a98cf24 100644
---- a/OvmfPkg/Library/PlatformInitLib/Platform.c
-+++ b/OvmfPkg/Library/PlatformInitLib/Platform.c
-@@ -767,6 +767,10 @@ PlatformReserveEmuVariableNvStore (
-     VarStoreSize / 1024
-     ));
+diff --git a/OvmfPkg/PlatformPei/Platform.c b/OvmfPkg/PlatformPei/Platform.c
+index b1f8140d60..5f10976144 100644
+--- a/OvmfPkg/PlatformPei/Platform.c
++++ b/OvmfPkg/PlatformPei/Platform.c
+@@ -219,6 +219,7 @@ ReserveEmuVariableNvStore (
+ {
+   EFI_PHYSICAL_ADDRESS  VariableStore;
+   RETURN_STATUS         PcdStatus;
++  UINT32                VarStoreSize;
  
-+  // Clean variable space for now, as we don't want to persist variables over reboot
-+  if (VariableStore != NULL)
-+    SetMem((VOID *)VariableStore, VarStoreSize, 0x0);
+   VariableStore = (EFI_PHYSICAL_ADDRESS)(UINTN)PlatformReserveEmuVariableNvStore ();
+   PcdStatus     = PcdSet64S (PcdEmuVariableNvStoreReserved, VariableStore);
+@@ -227,6 +228,12 @@ ReserveEmuVariableNvStore (
+   PlatformInitEmuVariableNvStore ((VOID *)(UINTN)VariableStore);
+  #endif
+ 
++  VarStoreSize = 2 * PcdGet32 (PcdFlashNvStorageFtwSpareSize);
 +
-   return VariableStore;
++  // Clean variable space for now, as we don't want to persist variables over reboot
++  if ((VOID *)(UINTN)VariableStore != NULL)
++    SetMem((VOID *)(UINTN)VariableStore, VarStoreSize, 0x0);
++
+   ASSERT_RETURN_ERROR (PcdStatus);
  }
  
