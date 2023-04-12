@@ -3,6 +3,13 @@
 Thank you for your interest in contributing to our project. Whether it's a bug report, new feature, correction, or additional
 documentation, we greatly value feedback and contributions from our community.
 
+Please note that only the contributions related to files hosted on this
+repository will be considered. Contributions addressing the edk2 source
+code should be submitted to the
+[edk2](https://github.com/tianocore/edk2) project, following its
+[contributing
+guidelines](https://github.com/tianocore/edk2/blob/master/CONTRIBUTING.md).
+
 Please read through this document before submitting any issues or pull requests to ensure we have all the necessary
 information to effectively respond to your bug report or contribution.
 
