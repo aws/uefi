@@ -1,0 +1,117 @@
+From 72229debcf05868dba2dd5cf957d6aba2a205101 Mon Sep 17 00:00:00 2001
+From: Sabin Rapan <sabrapan@amazon.com>
+Date: Tue, 11 Apr 2023 19:52:12 +0200
+Subject: [PATCH] Skip reserved memory in high-memory from SEV-SNP
+ prevalidation
+
+High-memory ranges can contain overlaps between regular RAM and reserved
+memory. Given that the hypervisor needs access to the reserved memory,
+we need to identify such overlaps and skip the reserved memory from
+SEV-SNP prevalidation and thus from being encrypted.
+
+Signed-off-by: Sabin Rapan <sabrapan@amazon.com>
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+
+diff --git a/OvmfPkg/PlatformPei/AmdSev.c b/OvmfPkg/PlatformPei/AmdSev.c
+index e1b9fd9b7f..3ea8a20078 100644
+--- a/OvmfPkg/PlatformPei/AmdSev.c
++++ b/OvmfPkg/PlatformPei/AmdSev.c
+@@ -30,6 +30,55 @@ GetHypervisorFeature (
+   VOID
+   );
+ 
++STATIC
++BOOLEAN
++DetectReservedOverlap (
++  IN    PHYSICAL_ADDRESS         StartAddress,
++  IN    PHYSICAL_ADDRESS         EndAddress,
++  OUT   PHYSICAL_ADDRESS         *IntersectBegin,
++  OUT   PHYSICAL_ADDRESS         *IntersectEnd
++  )
++{
++  EFI_PEI_HOB_POINTERS         Hob;
++  EFI_HOB_MEMORY_ALLOCATION    *MemAllocHob;
++  PHYSICAL_ADDRESS             RsvdStart;
++  PHYSICAL_ADDRESS             RsvdEnd;
++
++  for (Hob.Raw = GetHobList(); !END_OF_HOB_LIST(Hob); Hob.Raw = GET_NEXT_HOB(Hob)) {
++    if ((Hob.Raw != NULL) && (GET_HOB_TYPE (Hob) == EFI_HOB_TYPE_MEMORY_ALLOCATION)) {
++      MemAllocHob = Hob.MemoryAllocation;
++
++      if (MemAllocHob->AllocDescriptor.MemoryType == EfiReservedMemoryType) {
++        RsvdStart = MemAllocHob->AllocDescriptor.MemoryBaseAddress;
++        RsvdEnd = RsvdStart + MemAllocHob->AllocDescriptor.MemoryLength;
++
++        if (RsvdStart <= StartAddress && RsvdEnd <= EndAddress && RsvdEnd > StartAddress) {
++          *IntersectBegin = StartAddress;
++          *IntersectEnd = RsvdEnd;
++          return TRUE;
++
++        } else if (RsvdStart >= StartAddress && RsvdEnd <= EndAddress) {
++          *IntersectBegin = RsvdStart;
++          *IntersectEnd = RsvdEnd;
++          return TRUE;
++
++        } else if (RsvdStart >= StartAddress && RsvdStart < EndAddress && RsvdEnd >= EndAddress) {
++          *IntersectBegin = RsvdStart;
++          *IntersectEnd = EndAddress;
++          return TRUE;
++
++        } else if (RsvdStart <= StartAddress && RsvdEnd >= EndAddress) {
++          *IntersectBegin = StartAddress;
++          *IntersectEnd = EndAddress;
++          return TRUE;
++        }
++      }
++    }
++  }
++
++  return FALSE;
++}
++
+ /**
+   Initialize SEV-SNP support if running as an SEV-SNP guest.
+ 
+@@ -44,6 +93,10 @@ AmdSevSnpInitialize (
+   EFI_HOB_RESOURCE_DESCRIPTOR  *ResourceHob;
+   UINT64                       HvFeatures;
+   EFI_STATUS                   PcdStatus;
++  PHYSICAL_ADDRESS             BaseAddress;
++  PHYSICAL_ADDRESS             EndAddress;
++  PHYSICAL_ADDRESS             IntersectBegin;
++  PHYSICAL_ADDRESS             IntersectEnd;
+ 
+   if (!MemEncryptSevSnpIsEnabled ()) {
+     return;
+@@ -65,10 +118,27 @@ AmdSevSnpInitialize (
+       ResourceHob = Hob.ResourceDescriptor;
+ 
+       if (ResourceHob->ResourceType == EFI_RESOURCE_SYSTEM_MEMORY) {
+-        MemEncryptSevSnpPreValidateSystemRam (
+-          ResourceHob->PhysicalStart,
+-          EFI_SIZE_TO_PAGES ((UINTN)ResourceHob->ResourceLength)
+-          );
++        BaseAddress = ResourceHob->PhysicalStart;
++        EndAddress = BaseAddress + ResourceHob->ResourceLength;
++
++        if (BaseAddress >= 0x100000000ul) {
++          while (BaseAddress < EndAddress) {
++            if (DetectReservedOverlap(BaseAddress, EndAddress, &IntersectBegin, &IntersectEnd)) {
++              /* Overlap with reserved area */
++              if (BaseAddress < IntersectBegin) {
++                MemEncryptSevSnpPreValidateSystemRam(BaseAddress, EFI_SIZE_TO_PAGES((UINTN)(IntersectBegin - BaseAddress)));
++              }
++              BaseAddress = IntersectEnd;
++
++            } else {
++              /* No overlap */
++              MemEncryptSevSnpPreValidateSystemRam(BaseAddress, EFI_SIZE_TO_PAGES((UINTN)(EndAddress - BaseAddress)));
++              BaseAddress = EndAddress;
++            }
++          }
++        } else {
++          MemEncryptSevSnpPreValidateSystemRam(BaseAddress, EFI_SIZE_TO_PAGES((UINTN)(EndAddress - BaseAddress)));
++        }
+       }
+     }
+   }
