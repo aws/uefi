@@ -1,0 +1,28 @@
+From 5add67a0a4e666602fdec98138fc2127be380391 Mon Sep 17 00:00:00 2001
+From: Petre Eftime <epetre@amazon.com>
+Date: Mon, 15 May 2023 15:24:53 +0000
+Subject: [PATCH] OvmfPkg: disable TPM2 SHA1
+
+SHA1 is no longer a strong enough algorithm for many(most) usecases. This
+commit disables SHA1 as a default so that it's not used by mistake
+in attestation policies. If required, it can be reactivated via the PPI
+for any particular usecase that still depends on SHA1.
+
+Signed-off-by: Petre Eftime <epetre@amazon.com>
+---
+ OvmfPkg/OvmfTpmPcds.dsc.inc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/OvmfPkg/OvmfTpmPcds.dsc.inc b/OvmfPkg/OvmfTpmPcds.dsc.inc
+index 0d55d62737..e9271b0273 100644
+--- a/OvmfPkg/OvmfTpmPcds.dsc.inc
++++ b/OvmfPkg/OvmfTpmPcds.dsc.inc
+@@ -4,4 +4,5 @@
+ 
+ !if $(TPM2_ENABLE) == TRUE
+   gEfiSecurityPkgTokenSpaceGuid.PcdTpmInstanceGuid|{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
++  gEfiSecurityPkgTokenSpaceGuid.PcdTpm2HashMask|0x1E
+ !endif
+-- 
+2.39.2
+
