@@ -1,12 +1,7 @@
 name: build-nix
 run-name: UEFI build - Nix
 
-on:
-  push:
-    paths-ignore:
-      - 'version'
-      - '*.md'
-      - '.github/workflows/release.yml'
+on: [push, pull_request]
 
 jobs:
   build_changes:
