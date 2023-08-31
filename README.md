@@ -24,6 +24,14 @@ nix-build --pure
 This will produce the `result/ovmf_img.fd` binary which can be matched
 against running and released UEFI binaries.
 
+## How to generate a measurement
+The [sev-snp-measure](https://github.com/virtee/sev-snp-measure) tool
+can be used to generate measurements, e.g.  for a guest with 4 vCPUs:
+
+```
+./sev-snp-measure.py --mode snp --vcpus=4 --vmm-type=ec2 --ovmf=ovmf_img.fd
+```
+
 ## Security
 
 See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
