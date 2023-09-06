@@ -1,0 +1,93 @@
+From de9023263ae8d0750009f98042d6d3fca7d8d61f Mon Sep 17 00:00:00 2001
+From: Mohamed Mediouni <mediou@amazon.com>
+Date: Tue, 20 Jun 2023 15:29:51 +0000
+Subject: [PATCH] bds: Add timeout before reboot
+
+After all the existing boot options are exhausted, add a 1 minute
+minute timeout before rebooting when Secure Boot is on, to not have an
+instant reboot.
+
+For the Secure Boot off case, the shell will take care of the timeout.
+
+Signed-off-by: Mohamed Mediouni <mediou@amazon.com>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Roman Kagan <rkagan@amazon.de>
+Reviewed-by: Filippo Sironi <sironi@amazon.de>
+
+diff --git a/MdeModulePkg/Universal/BdsDxe/Bds.h b/MdeModulePkg/Universal/BdsDxe/Bds.h
+index 2b20fec8f4..3c76e07581 100644
+--- a/MdeModulePkg/Universal/BdsDxe/Bds.h
++++ b/MdeModulePkg/Universal/BdsDxe/Bds.h
+@@ -14,6 +14,7 @@ SPDX-License-Identifier: BSD-2-Clause-Patent
+ #include <Guid/ConnectConInEvent.h>
+ #include <Guid/StatusCodeDataTypeVariable.h>
+ #include <Guid/EventGroup.h>
++#include <Guid/ImageAuthentication.h>
+ 
+ #include <Protocol/Bds.h>
+ #include <Protocol/LoadedImage.h>
+diff --git a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+index 33db648c68..84fa8e2b4c 100644
+--- a/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
++++ b/MdeModulePkg/Universal/BdsDxe/BdsEntry.c
+@@ -735,6 +735,7 @@ BdsEntry (
+   EFI_STATUS                      BootManagerMenuStatus;
+   EFI_BOOT_MANAGER_LOAD_OPTION    PlatformDefaultBootOption;
+   EFI_BOOT_MANAGER_LOAD_OPTION    BootEfiShell;
++  UINT8                           *SecureBoot;
+ 
+   HotkeyTriggered = NULL;
+   Status          = EFI_SUCCESS;
+@@ -1162,20 +1163,41 @@ BdsEntry (
+     &BootEfiShell
+   );
+ 
+-  if (Status == EFI_SUCCESS) {
+-    AsciiPrint (
+-      "No bootable option or device was found.\n"
+-      "Dropping to the EFI Shell.\n"
+-      "Exiting the UEFI shell will restart the system"
+-    );
+-
+-    EfiBootManagerBoot (&BootEfiShell);
++  AsciiPrint (
++    "No bootable device found.\n"
++  );
+ 
+-    // If we can not drop into the Efi Shell or the shell exited reset
+-    gRT->ResetSystem (EfiResetWarm, EFI_SUCCESS, 0, NULL);
++  // Get the Uefi Shell boot entry
++  Status = GetFvLoadOption (
++    &gUefiShellFileGuid,
++    &BootEfiShell
++  );
+ 
+-    // Unreachable
++  SecureBoot = NULL;
++  GetEfiGlobalVariable2 (EFI_SECURE_BOOT_MODE_NAME, (VOID**)&SecureBoot, NULL);
++  
++  // If the shell is not present, stall for 1 minute.
++  // If Secure Boot is enabled, also stall for 1 minute.
++  // Wait for 1 minute to avoid reboot loops. It's very unlikely that
++  // an instant reboot will be more succesful than this one.
++  if ( (Status != EFI_SUCCESS)
++    || ((SecureBoot != NULL) && (*SecureBoot == SECURE_BOOT_MODE_ENABLE))) {
++      AsciiPrint ("Rebooting in 1 minute.\n");
++      gBS->Stall (1000 * 1000 * 60);
+   }
++  // Otherwise, go to the UEFI shell.
++  else {
++      AsciiPrint (
++        "Dropping to the EFI Shell.\n"
++        "Exiting the UEFI shell will restart the system."
++      );
++      EfiBootManagerBoot (&BootEfiShell);
++  }
++    
++  // If we can not drop into the EFI shell or the shell exited, reset.
++  gRT->ResetSystem (EfiResetWarm, EFI_SUCCESS, 0, NULL);
++
++  // Unreachable
+ 
+   EfiBootManagerFreeLoadOption (&PlatformDefaultBootOption);
+ 

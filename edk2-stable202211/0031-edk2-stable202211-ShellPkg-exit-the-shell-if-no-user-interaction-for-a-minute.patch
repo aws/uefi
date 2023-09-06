@@ -1,0 +1,129 @@
+From c2f294e7c7fa9cae0fab5e733b5424918f670725 Mon Sep 17 00:00:00 2001
+From: Roman Kagan <rkagan@amazon.de>
+Date: Tue, 30 May 2023 15:18:40 +0000
+Subject: [PATCH] ShellPkg: exit the shell if no user interaction for a minute
+
+The regular behavior of UEFI firmware if it fails to boot from any of
+the configured boot entries is to start an interactive EFI Shell on the
+console.
+
+This does help to fix occasional misconfiguration problems indeed.
+However, in the case of recovery from a site-wide incident, the boot
+volumes may take long time to come up, and the instance itself may get
+started sooner.  In this case it will fail to boot, enter the
+interactive EFI Shell and get stuck there forever, waiting for manual
+intervention.  This is unacceptable from the static stability POV.
+
+To avoid this problem, while keeping the possibility to manually fix
+misconfiguration issues via EFI Shell, make it wait for any user input
+for a minute, and then exit, causing the system to reset itself.  This
+behavior is similar to what SeaBIOS does (except that it doesn't offer
+an interactive environment and just resets the system after 60 seconds
+from the failed boot attempt).
+
+More precisely, the Shell behavior as intended by this commit is:
+
+- wait up to 5 seconds for the user to press ESC to skip startup.nsh
+  execution, or any other key to cancel the wait;
+- if no ESC was pressed and startup.nsh is present, run it;
+- otherwise, if no key was pressed so far, wait up to another 60 seconds
+  for any key to cancel the wait and start interactive session;
+- otherwise exit the shell with a failure and cause the system reset.
+
+Signed-off-by: Roman Kagan <rkagan@amazon.de>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Mohamed Mediouni <mediou@amazon.de>
+Reviewed-by: Filippo Sironi <sironi@amazon.de>
+
+diff --git a/ShellPkg/Application/Shell/Shell.c b/ShellPkg/Application/Shell/Shell.c
+index 8ee92db1fd..cbbce8b03d 100644
+--- a/ShellPkg/Application/Shell/Shell.c
++++ b/ShellPkg/Application/Shell/Shell.c
+@@ -69,6 +69,7 @@ SHELL_INFO  ShellInfoObject = {
+   NULL,
+   NULL,
+   NULL,
++  FALSE,
+   FALSE
+ };
+ 
+@@ -632,6 +633,31 @@ UefiMain (
+         (VOID*) shellstatus);
+ 
+       if (!ShellInfoObject.ShellInitSettings.BitUnion.Bits.Exit && !ShellCommandGetExit () && ((PcdGet8 (PcdShellSupportLevel) >= 3) || PcdGetBool (PcdShellForceConsole)) && !EFI_ERROR (Status) && !ShellInfoObject.ShellInitSettings.BitUnion.Bits.NoConsoleIn) {
++        //
++        // Exit the root shell and reset the system if
++        // there was no user interaction for 60 seconds.
++        //
++        if (ShellInfoObject.RootShellInstance) {
++          UINTN Delay;
++          EFI_INPUT_KEY Key;
++          gST->ConOut->EnableCursor(gST->ConOut, FALSE);
++          for ( Delay = 60
++                ; Delay != 0 && !ShellInfoObject.UserActionStarted
++                ; Delay--
++              ){
++            ShellPrintHiiEx(0, gST->ConOut->Mode->CursorRow, NULL, STRING_TOKEN (STR_SHELL_IDLE_EXIT_QUESTION), ShellInfoObject.HiiHandle, Delay);
++            gBS->Stall (1000000);
++            Status = gST->ConIn->ReadKeyStroke (gST->ConIn, &Key);
++            ShellInfoObject.UserActionStarted = !EFI_ERROR(Status);
++          }
++          ShellPrintHiiEx(-1, -1, NULL, STRING_TOKEN (STR_SHELL_CRLF), ShellInfoObject.HiiHandle);
++          gST->ConOut->EnableCursor(gST->ConOut, TRUE);
++
++          if (!ShellInfoObject.UserActionStarted) {
++            goto RestoreConIn;
++          }
++        }
++
+         //
+         // begin the UI waiting loop
+         //
+@@ -659,6 +685,7 @@ UefiMain (
+         } while (!ShellCommandGetExit ());
+       }
+ 
++RestoreConIn:
+       if ((OldConIn != NULL) && (ConInHandle != NULL)) {
+         CloseSimpleTextInOnFile (gST->ConIn);
+         gST->ConIn           = OldConIn;
+@@ -1368,6 +1395,7 @@ DoStartupScript (
+ 
+   ShellPrintHiiEx (-1, -1, NULL, STRING_TOKEN (STR_SHELL_CRLF), ShellInfoObject.HiiHandle);
+   gST->ConOut->EnableCursor (gST->ConOut, TRUE);
++  ShellInfoObject.UserActionStarted = !EFI_ERROR(Status);
+ 
+   //
+   // ESC was pressed
+@@ -1391,6 +1419,7 @@ DoStartupScript (
+       Status = RunScriptFile (FullFileStringPath, NULL, FullFileStringPath, ShellInfoObject.NewShellParametersProtocol);
+       FreePool (FullFileStringPath);
+     }
++    ShellInfoObject.UserActionStarted = TRUE;
+ 
+     FreePool (FileStringPath);
+   } else {
+diff --git a/ShellPkg/Application/Shell/Shell.h b/ShellPkg/Application/Shell/Shell.h
+index 89b4ac6b02..978e84947e 100644
+--- a/ShellPkg/Application/Shell/Shell.h
++++ b/ShellPkg/Application/Shell/Shell.h
+@@ -120,6 +120,7 @@ typedef struct {
+   VOID                             *CtrlSNotifyHandle3; ///< The NotifyHandle returned from SimpleTextInputEx.RegisterKeyNotify.
+   VOID                             *CtrlSNotifyHandle4; ///< The NotifyHandle returned from SimpleTextInputEx.RegisterKeyNotify.
+   BOOLEAN                          HaltOutput;          ///< TRUE to start a CTRL-S halt.
++  BOOLEAN                          UserActionStarted;
+ } SHELL_INFO;
+ 
+ #pragma pack(1)
+diff --git a/ShellPkg/Application/Shell/Shell.uni b/ShellPkg/Application/Shell/Shell.uni
+index 7dd0072601..73ac43eb54 100644
+--- a/ShellPkg/Application/Shell/Shell.uni
++++ b/ShellPkg/Application/Shell/Shell.uni
+@@ -25,6 +25,7 @@
+ #string STR_SHELL_SHELL               #language en-US "%EShell> %N"
+ 
+ #string STR_SHELL_STARTUP_QUESTION    #language en-US "%NPress %HESC%N in %d seconds to skip %Estartup.nsh%N or any other key to continue."
++#string STR_SHELL_IDLE_EXIT_QUESTION  #language en-US "%NThe system will reboot in %2d seconds. Press any key to run interactive shell."
+ 
+ #string STR_SHELL_ENTER_TO_CONT       #language en-US "%NPress ENTER to continue:%E"
+ #string STR_SHELL_QUIT_CONT           #language en-US "%NPress ENTER to continue or 'Q' break:%E"
