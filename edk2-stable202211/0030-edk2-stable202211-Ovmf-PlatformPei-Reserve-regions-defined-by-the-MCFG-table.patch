@@ -1,0 +1,105 @@
+From 90452cbf093d2cb959d8ae64cad71722890434b6 Mon Sep 17 00:00:00 2001
+From: Dmitry Sepp <dsepp@amazon.de>
+Date: Fri, 16 Sep 2022 09:18:59 +0000
+Subject: [PATCH] Ovmf/PlatformPei: Reserve regions defined by the MCFG table
+
+The existing code reserves an area of a fixed size (one PCIe Segment
+Group) based on the Host Bridge ID. This approach does not fit our
+requirements for several reasons:
+
+- we need to support more then one Segment Group (aka domain)
+- we don't support the Q35 chipset but still want to have PCIe support
+  for the additional Host Bridges we declare
+
+Read the MCFG table provided via the fw-cfg interface and reserve memory
+regions according to the MCFG table data.
+
+Signed-off-by: Dmitry Sepp <dsepp@amazon.de>
+Reviewed-by: Thomas Hutschenreuther <hutsts@amazon.de>
+Reviewed-by: Dmitry Monakhov <monakhov@amazon.de>
+Reviewed-by: Nicolas Ojeda Leon <ncoleon@amazon.de>
+
+diff --git a/OvmfPkg/Library/PlatformInitLib/Platform.c b/OvmfPkg/Library/PlatformInitLib/Platform.c
+index 2582689ffe..df2714369a 100644
+--- a/OvmfPkg/Library/PlatformInitLib/Platform.c
++++ b/OvmfPkg/Library/PlatformInitLib/Platform.c
+@@ -32,6 +32,8 @@
+ #include <Library/PciLib.h>
+ #include <Guid/SystemNvDataGuid.h>
+ #include <Guid/VariableFormat.h>
++#include <IndustryStandard/Acpi.h>
++#include <IndustryStandard/MemoryMappedConfigurationSpaceAccessTable.h>
+ #include <OvmfPlatforms.h>
+ 
+ #include <Library/PlatformInitLib.h>
+@@ -126,12 +128,22 @@ PlatformMemMapInitialization (
+   IN OUT EFI_HOB_PLATFORM_INFO  *PlatformInfoHob
+   )
+ {
+-  UINT64  PciIoBase;
+-  UINT64  PciIoSize;
+-  UINT32  TopOfLowRam;
+-  UINT64  PciExBarBase;
+-  UINT32  PciBase;
+-  UINT32  PciSize;
++  UINT64                PciIoBase;
++  UINT64                PciIoSize;
++  UINT32                TopOfLowRam;
++  UINT64                PciExBarBase;
++  UINT32                PciBase;
++  UINT32                PciSize;
++  EFI_STATUS            Status;
++  FIRMWARE_CONFIG_ITEM  FwCfgItem;
++  UINTN                 FwCfgSize;
++  UINTN                 McfgTableEntryLength;
++  UINTN                 McfgTableEntryIndex;
++  UINTN                 McfgTableEntryCount;
++  UINT64                EcamRegionOffset;
++  UINT64                EcamRegionSize;
++  EFI_ACPI_MEMORY_MAPPED_CONFIGURATION_BASE_ADDRESS_TABLE_HEADER McfgTableHeader;
++  EFI_ACPI_MEMORY_MAPPED_ENHANCED_CONFIGURATION_SPACE_BASE_ADDRESS_ALLOCATION_STRUCTURE McfgTableEntry;
+ 
+   PciIoBase = 0xC000;
+   PciIoSize = 0x4000;
+@@ -216,6 +228,41 @@ PlatformMemMapInitialization (
+       SIZE_256MB,
+       EfiReservedMemoryType
+       );
++  } else {
++    //
++    // Check for MCFG presence and reserve address space based on the
++    // provided information.
++    //
++    Status = QemuFwCfgFindFile ("etc/acpi/mcfg", &FwCfgItem, &FwCfgSize);
++    if (!EFI_ERROR (Status)) {
++      QemuFwCfgSelectItem (FwCfgItem);
++      QemuFwCfgReadBytes (sizeof (McfgTableHeader), &McfgTableHeader);
++
++      McfgTableEntryLength = McfgTableHeader.Header.Length -
++                             sizeof (McfgTableHeader);
++      McfgTableEntryCount = McfgTableEntryLength / sizeof (McfgTableEntry);
++
++      for (McfgTableEntryIndex = 0;
++           McfgTableEntryIndex < McfgTableEntryCount;
++           McfgTableEntryIndex++) {
++        QemuFwCfgReadBytes (sizeof (McfgTableEntry), &McfgTableEntry);
++
++        EcamRegionOffset = McfgTableEntry.StartBusNumber * SIZE_1MB;
++        EcamRegionSize =
++          (McfgTableEntry.EndBusNumber - McfgTableEntry.StartBusNumber + 1) *
++          SIZE_1MB;
++
++        PlatformAddReservedMemoryBaseSizeHob (
++          McfgTableEntry.BaseAddress + EcamRegionOffset,
++          EcamRegionSize,
++          FALSE);
++
++        BuildMemoryAllocationHob (
++          McfgTableEntry.BaseAddress + EcamRegionOffset,
++          EcamRegionSize,
++          EfiReservedMemoryType);
++      }
++    }
+   }
+ 
+   PlatformAddIoMemoryBaseSizeHob (PcdGet32 (PcdCpuLocalApicBaseAddress), SIZE_1MB);

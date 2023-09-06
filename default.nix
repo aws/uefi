@@ -54,6 +54,11 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0026-edk2-stable202211-OvmfPkg-PlatformPei-Initialize-SEV-immediately-after-RAM.patch
     ./edk2-stable202211/0027-edk2-stable202211-Skip-reserved-memory-in-high-memory-from-SEV-SNP-prevalidation.patch
     ./edk2-stable202211/0028-edk2-stable202211-OvmfPkg-disable-TPM2-SHA1.patch
+    ./edk2-stable202211/0029-edk2-stable202211-HardwareInfoLib-HardwareInfoPciHostBridgeLib-Add-Segment-Group-field.patch
+    ./edk2-stable202211/0030-edk2-stable202211-Ovmf-PlatformPei-Reserve-regions-defined-by-the-MCFG-table.patch
+    ./edk2-stable202211/0031-edk2-stable202211-ShellPkg-exit-the-shell-if-no-user-interaction-for-a-minute.patch
+    ./edk2-stable202211/0032-edk2-stable202211-uefi-shell-Disable-the-shell-when-UEFI-Secure-Boot-is-on.patch
+    ./edk2-stable202211/0033-edk2-stable202211-bds-Add-timeout-before-reboot.patch
     ./edk2-stable202211/9001-Remove-Wno-format-compiling-flag-for-Openssl-files.patch
   ];
 

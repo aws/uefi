@@ -1,0 +1,46 @@
+From f37b575a1e24fa57a14e66a416b1e74c51ed7ad9 Mon Sep 17 00:00:00 2001
+From: Mohamed Mediouni <mediou@amazon.com>
+Date: Tue, 13 Jun 2023 10:05:09 +0000
+Subject: [PATCH] uefi: shell: Disable the shell when UEFI Secure Boot is on
+
+When UEFI Secure Boot is on, we should not allow for the UEFI shell to
+be used. As such, disabling it in that scenario.
+
+Signed-off-by: Mohamed Mediouni <mediou@amazon.com>
+Reviewed-by: Alexander Graf (AWS) <graf@amazon.de>
+Reviewed-by: Filippo Sironi <sironi@amazon.de>
+
+diff --git a/ShellPkg/Application/Shell/Shell.c b/ShellPkg/Application/Shell/Shell.c
+index cbbce8b03d..d1648ae155 100644
+--- a/ShellPkg/Application/Shell/Shell.c
++++ b/ShellPkg/Application/Shell/Shell.c
+@@ -358,6 +358,16 @@ UefiMain (
+   EFI_HANDLE                      ConInHandle;
+   EFI_SIMPLE_TEXT_INPUT_PROTOCOL  *OldConIn;
+   SPLIT_LIST                      *Split;
++  UINT8                           *SecureBoot;
++
++  // If Secure Boot is enabled, do not launch the UEFI shell
++  SecureBoot = NULL;
++  GetEfiGlobalVariable2 (EFI_SECURE_BOOT_MODE_NAME, (VOID**)&SecureBoot, NULL);
++  if ((SecureBoot != NULL) && (*SecureBoot == SECURE_BOOT_MODE_ENABLE)) {
++    FreePool(SecureBoot);
++    return EFI_SECURITY_VIOLATION;
++  }
++  FreePool(SecureBoot);
+ 
+   if (PcdGet8 (PcdShellSupportLevel) > 3) {
+     return (EFI_UNSUPPORTED);
+diff --git a/ShellPkg/Application/Shell/Shell.h b/ShellPkg/Application/Shell/Shell.h
+index 978e84947e..812a5a28ca 100644
+--- a/ShellPkg/Application/Shell/Shell.h
++++ b/ShellPkg/Application/Shell/Shell.h
+@@ -14,6 +14,8 @@
+ 
+ #include <Guid/ShellVariableGuid.h>
+ #include <Guid/ShellAliasGuid.h>
++#include <Guid/GlobalVariable.h>
++#include <Guid/ImageAuthentication.h>
+ 
+ #include <Protocol/LoadedImage.h>
+ #include <Protocol/SimpleTextOut.h>

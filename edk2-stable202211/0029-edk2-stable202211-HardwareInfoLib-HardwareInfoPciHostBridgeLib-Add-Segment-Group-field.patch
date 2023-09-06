@@ -1,0 +1,34 @@
+From 3eb5fe14011ef880426c67d2f3393ef5558806ff Mon Sep 17 00:00:00 2001
+From: Dmitry Sepp <dsepp@amazon.de>
+Date: Mon, 15 Aug 2022 08:51:18 +0000
+Subject: [PATCH] HardwareInfoLib/HardwareInfoPciHostBridgeLib: Add Segment
+ Group field
+
+The Nitro hypervisor is now using PCI Segment group numbers to enable
+more devices and make the device hierarchy more flexible and
+descriptive.
+
+Add the PCI Segment Group field to the Host Bridge data package to make
+firmware aware of segments for potential future use.
+
+Signed-off-by: Dmitry Sepp <dsepp@amazon.de>
+Reviewed-by: Thomas Hutschenreuther <hutsts@amazon.de>
+Reviewed-by: Dmitry Monakhov <monakhov@amazon.de>
+Reviewed-by: Nicolas Ojeda Leon <ncoleon@amazon.de>
+
+diff --git a/OvmfPkg/Library/HardwareInfoLib/HardwareInfoPciHostBridgeLib.h b/OvmfPkg/Library/HardwareInfoLib/HardwareInfoPciHostBridgeLib.h
+index 627de118d3..09b0398398 100644
+--- a/OvmfPkg/Library/HardwareInfoLib/HardwareInfoPciHostBridgeLib.h
++++ b/OvmfPkg/Library/HardwareInfoLib/HardwareInfoPciHostBridgeLib.h
+@@ -45,7 +45,10 @@ typedef struct {
+   UINT8     BusNrStart;
+   UINT8     BusNrLast;
+ 
+-  UINT8     Padding[2];
++  //
++  // Segment group number
++  //
++  UINT16    SegmentGroupNr;
+ 
+   //
+   // IO aperture
