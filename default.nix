@@ -51,7 +51,7 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0023-edk2-stable202211-ExtVarStore-Add-support-for-PIO-transfer.patch
     ./edk2-stable202211/0024-edk2-stable202211-ExtVarStore-Use-TRANSFER-when-we-run-in-SEV.patch
     ./edk2-stable202211/0025-edk2-stable202211-ExtVarStore-Add-hook-to-force-enable-TRANSFER.patch
-    ./edk2-stable202211/0026-edk2-stable202211-OvmfPkg-PlatformPei-Initialize-SEV-immediately-after-RAM.patch
+    ./edk2-stable202211/0026-edk2-stable202211-OvmfPkg-PlatformPei-Initialize-variable-store-after-SEV.patch
     ./edk2-stable202211/0027-edk2-stable202211-Skip-reserved-memory-in-high-memory-from-SEV-SNP-prevalidation.patch
     ./edk2-stable202211/0028-edk2-stable202211-OvmfPkg-disable-TPM2-SHA1.patch
     ./edk2-stable202211/0029-edk2-stable202211-HardwareInfoLib-HardwareInfoPciHostBridgeLib-Add-Segment-Group-field.patch
