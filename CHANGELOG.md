@@ -1,3 +1,21 @@
+## 2024-01-12
+
+- PCIe support:
+  * HardwareInfoLib/HardwareInfoPciHostBridgeLib: Add Segment Group field
+  * Ovmf/PlatformPei: Reserve regions defined by the MCFG table
+
+- Shell related changes:
+  * ShellPkg: exit the shell if no user interaction for a minute
+  * uefi: shell: Disable the shell when UEFI Secure Boot is on
+  * bds: Add timeout before reboot
+
+- Security fixes:
+  * CVE-2022-36763 - https://github.com/tianocore/edk2/security/advisories/GHSA-xvv8-66cq-prwr
+  * CVE-2022-36764 - https://github.com/tianocore/edk2/security/advisories/GHSA-4hcq-p8q8-hj8j
+  * CVE-2022-36765 - https://github.com/tianocore/edk2/security/advisories/GHSA-ch4w-v7m3-g8wx
+
+SHA256: 63466debbb4543f8d77254057415b5d2442e42f698fc8ecd06495da264fcfc11
+
 ## 2023-05-16
 
 - Enable TPM 2.0 support
