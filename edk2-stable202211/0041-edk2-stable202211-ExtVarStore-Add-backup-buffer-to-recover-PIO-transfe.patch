@@ -1,0 +1,96 @@
+From e7a60d9061498db8a0f3e671be12b4033faf65e5 Mon Sep 17 00:00:00 2001
+From: Costin Lupu <lvpv@amazon.com>
+Date: Thu, 1 Aug 2024 16:02:53 +0200
+Subject: [PATCH] ExtVarStore: Add backup buffer to recover PIO transfers
+
+The local runtime buffer gets overwritten on regular PIO transfers.
+Given that the overwriting data may be corrupted, e.g. after
+liveupdates, we need a backup buffer from where to recover the original
+data in order to continue the PIO transfers successfully.
+
+Signed-off-by: Costin Lupu <lvpv@amazon.com>
+Reviewed-by: Hendrik Borghorst <hborghor@amazon.de>
+Reviewed-by: Marius Knaust <mknaust@amazon.de>
+---
+ nitro/ExtVarStore/ExtVarStore.c | 30 +++++++++++++++++++++++++++---
+ 1 file changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/nitro/ExtVarStore/ExtVarStore.c b/nitro/ExtVarStore/ExtVarStore.c
+index f8924fd765..19cabedb74 100644
+--- a/nitro/ExtVarStore/ExtVarStore.c
++++ b/nitro/ExtVarStore/ExtVarStore.c
+@@ -49,6 +49,7 @@ static SPIN_LOCK *var_lock;
+ 
+ static VOID *comm_buf_phys;
+ VOID *comm_buf;
++STATIC VOID *comm_buf_backup;
+ 
+ #define BOUNCE_ATTEMPTS_MAX 2
+ 
+@@ -76,6 +77,20 @@ ExtVarStoreRead32(VOID)
+ #endif
+ }
+ 
++STATIC EFI_STATUS enable_bounce(VOID)
++{
++  if (bounceData == TRUE || comm_buf_backup != NULL)
++    return EFI_ALREADY_STARTED;
++
++  comm_buf_backup = AllocateRuntimePages(SHMEM_PAGES);
++  if (comm_buf_backup == NULL)
++    return EFI_OUT_OF_RESOURCES;
++
++  bounceData = TRUE;
++
++  return EFI_SUCCESS;
++}
++
+ STATIC VOID exec_bounce(UINT8 *buf, UINTN len)
+ {
+   UINT32 crc32, local_crc32;
+@@ -89,6 +104,8 @@ STATIC VOID exec_bounce(UINT8 *buf, UINTN len)
+     .magic_value = TRANSFER_KICK_MAGIC,
+   };
+ 
++  CopyMem(comm_buf_backup, buf, len);
++
+   /*
+    * Try multiple times on failure. This can happen if the host erases
+    * the transfer buffer while we were transferring data.
+@@ -140,6 +157,8 @@ STATIC VOID exec_bounce(UINT8 *buf, UINTN len)
+     for (i = 0; i < outsize; i++) {
+       DEBUG ((DEBUG_ERROR, "buf[%d] = 0x%02x\n", i, buf[i]));
+     }
++
++    CopyMem(buf, comm_buf_backup, len);
+   }
+ }
+ 
+@@ -367,7 +386,9 @@ ExtSetVariable (
+     if ((read_feature_flags(&features) == EFI_SUCCESS) &&
+         (features.features & FEATURE_CRC32) &&
+         (features.features & FEATURE_TRANSFER)) {
+-      bounceData = TRUE;
++      rc = enable_bounce();
++      if (rc != EFI_SUCCESS)
++        return rc;
+     }
+   }
+ 
+@@ -592,8 +613,11 @@ ExtVarStoreInit(IN EFI_HANDLE ImageHandle, IN EFI_SYSTEM_TABLE *SystemTable)
+ #ifdef MDE_CPU_X64
+   if (MemEncryptSevIsEnabled () &&
+       (features.features & FEATURE_CRC32) &&
+-      (features.features & FEATURE_TRANSFER))
+-    bounceData = TRUE;
++      (features.features & FEATURE_TRANSFER)) {
++    Status = enable_bounce();
++    if (Status != EFI_SUCCESS)
++      return Status;
++  }
+ #endif
+ 
+   var_lock = AllocateRuntimeZeroPool(sizeof(*var_lock));
+-- 
+2.34.1
+

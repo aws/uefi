@@ -66,6 +66,7 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0038-edk2-stable202211-SecurityPkg-DxeTpmMeasureBootLib-SECURITY-PATCH-4118-CVE-2022-36764.patch
     ./edk2-stable202211/0039-edk2-stable202211-SecurityPkg-Adding-CVE-2022-36764-to-SecurityFixes.yaml.patch
     ./edk2-stable202211/0040-edk2-stable202211-SECURITY-PATCH-4166-CVE-2022-36765.patch
+    ./edk2-stable202211/0041-edk2-stable202211-ExtVarStore-Add-backup-buffer-to-recover-PIO-transfe.patch
     ./edk2-stable202211/9001-Remove-Wno-format-compiling-flag-for-Openssl-files.patch
   ];
 
