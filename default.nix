@@ -59,6 +59,13 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0031-edk2-stable202211-ShellPkg-exit-the-shell-if-no-user-interaction-for-a-minute.patch
     ./edk2-stable202211/0032-edk2-stable202211-uefi-shell-Disable-the-shell-when-UEFI-Secure-Boot-is-on.patch
     ./edk2-stable202211/0033-edk2-stable202211-bds-Add-timeout-before-reboot.patch
+    ./edk2-stable202211/0034-edk2-stable202211-SecurityPkg-DxeTpm2MeasureBootLib-SECURITY-PATCH-4117-CVE-2022-36763.patch
+    ./edk2-stable202211/0035-edk2-stable202211-SecurityPkg-DxeTpmMeasureBootLib-SECURITY-PATCH-4117-CVE-2022-36763.patch
+    ./edk2-stable202211/0036-edk2-stable202211-SecurityPkg-Adding-CVE-2022-36763-to-SecurityFixes.yaml.patch
+    ./edk2-stable202211/0037-edk2-stable202211-SecurityPkg-DxeTpm2MeasureBootLib-SECURITY-PATCH-4118-CVE-2022-36764.patch
+    ./edk2-stable202211/0038-edk2-stable202211-SecurityPkg-DxeTpmMeasureBootLib-SECURITY-PATCH-4118-CVE-2022-36764.patch
+    ./edk2-stable202211/0039-edk2-stable202211-SecurityPkg-Adding-CVE-2022-36764-to-SecurityFixes.yaml.patch
+    ./edk2-stable202211/0040-edk2-stable202211-SECURITY-PATCH-4166-CVE-2022-36765.patch
     ./edk2-stable202211/9001-Remove-Wno-format-compiling-flag-for-Openssl-files.patch
   ];
 
