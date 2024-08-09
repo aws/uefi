@@ -1,3 +1,8 @@
+## 2024-08-09
+
+- Enable security fixes
+- Recover PIO transfers on live-updates
+
 ## 2024-01-12
 
 - PCIe support:
