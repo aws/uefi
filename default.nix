@@ -83,7 +83,13 @@ pkgs.stdenv.mkDerivation rec {
     patchShebangs ./build.sh
     patchShebangs BaseTools/BinWrappers/PosixLike/
 
+    echo "======== x86_64 Build Start"
     ./build.sh x86
+
+    echo "======== x86_64 Build End"
+    echo "======== x86 OMVF Image SHA256 SUM"
+    sha256sum ovmf_img.fd
+    echo "========"
   '';
 
   installPhase = ''
