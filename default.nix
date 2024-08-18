@@ -93,7 +93,7 @@ pkgs.stdenv.mkDerivation rec {
 
   meta = {
     description = "UEFI edk2 for Nitro";
-    homepage = https://github.com/aws/uefi;
+    homepage = "https://github.com/aws/uefi";
     license = "bsd";
   };
 }
