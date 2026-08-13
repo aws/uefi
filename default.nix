@@ -67,6 +67,9 @@ pkgs.stdenv.mkDerivation rec {
     ./edk2-stable202211/0039-edk2-stable202211-SecurityPkg-Adding-CVE-2022-36764-to-SecurityFixes.yaml.patch
     ./edk2-stable202211/0040-edk2-stable202211-SECURITY-PATCH-4166-CVE-2022-36765.patch
     ./edk2-stable202211/0041-edk2-stable202211-ExtVarStore-Add-backup-buffer-to-recover-PIO-transfe.patch
+    ./edk2-stable202211/0042-edk2-stable202211-OvmfPkg-Reserve-the-AP-Jump-buffer-in-the-SEV_ES_WORK_AREA.patch
+    ./edk2-stable202211/0043-edk2-stable202211-OvmfPkg-BaseMemEncryptSevLib-Make-GetSevEsWorkArea-Pei-Dxe-shared.patch
+    ./edk2-stable202211/0044-edk2-stable202211-OvmfPkg-BaseMemEncryptSevLib-Fetch-Sev-data-from-the-work-area.patch
     ./edk2-stable202211/9001-Remove-Wno-format-compiling-flag-for-Openssl-files.patch
   ];
 

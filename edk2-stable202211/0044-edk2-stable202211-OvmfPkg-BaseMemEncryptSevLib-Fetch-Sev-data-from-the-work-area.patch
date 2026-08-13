@@ -1,0 +1,205 @@
+From 2bd6805fede4ca6b8e9b69a91f280b040de70cf9 Mon Sep 17 00:00:00 2001
+From: John Berg <jhnberg@amazon.co.uk>
+Date: Wed, 5 Aug 2026 13:35:31 +0000
+Subject: [PATCH] OvmfPkg/BaseMemEncryptSevLib: Fetch Sev data from the work
+ area
+
+The first call to MemEncryptSevGetEncryptionMask() in the Dxe phase will
+look for the encryption mask for the page table entry by reading the
+PcdPteMemoryEncryptionAddressOrMask (dynamic PCD) token. The value is
+then cached for subsequent accesses. But if the first call has
+interrupts disabled, as is the case in the MmioExit function in the #VC
+handler then the PcdGet64() will re-enable interrupts unexpectedly. A
+hypervisor may then inject interrupts into the guest whilst the guest is
+not expected to be interrupted. This leads to the ovmf image hanging
+when handling too many nested #VC exceptions.
+
+This patch avoids using the PcdPteMemoryEncryptionAddressOrMask token in
+the MemEncryptSevGetEncryptionMask() function as it cannot be called
+safely from a context where interrupts are disabled. Instead, we fetch
+the values from the SEC_SEV_ES_WORK_AREA in the Dxe phase. The work area
+is already used in the Pei phase, and is available in the Dxe phase as it
+is marked as either EfiBootServicesData or EfiACPIMemoryNVS. However,
+the work area will be inaccessible when SetVirtualAddressMap() is called,
+so we only read the work area in the Dxe phase through a constructor function.
+
+Signed-off-by: John Berg <jhnberg@amazon.co.uk>
+Signed-off-by: Ivan Orlov <iorlov@amazon.co.uk>
+
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
+index 72c64bf45c..0c3c5a3e37 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
+@@ -15,6 +15,7 @@
+   MODULE_TYPE                    = BASE
+   VERSION_STRING                 = 1.0
+   LIBRARY_CLASS                  = MemEncryptSevLib|DXE_CORE DXE_DRIVER DXE_RUNTIME_DRIVER DXE_SMM_DRIVER UEFI_DRIVER
++  CONSTRUCTOR                    = DxeMemEncryptSevLibConstructor
+ 
+ #
+ # The following information is for reference only and not required by the build
+@@ -57,10 +58,6 @@
+ [FeaturePcd]
+   gUefiOvmfPkgTokenSpaceGuid.PcdSmmSmramRequire
+ 
+-[Pcd]
+-  gEfiMdeModulePkgTokenSpaceGuid.PcdPteMemoryEncryptionAddressOrMask
+-  gEfiMdePkgTokenSpaceGuid.PcdConfidentialComputingGuestAttr
+-
+ [FixedPcd]
+   gUefiCpuPkgTokenSpaceGuid.PcdSevEsWorkAreaBase
+   gUefiOvmfPkgTokenSpaceGuid.PcdOvmfWorkAreaBase
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
+index 6c17367632..3f2fe0d463 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
+@@ -16,85 +16,45 @@
+ #include <Register/Amd/Msr.h>
+ #include <Register/Cpuid.h>
+ #include <Uefi/UefiBaseType.h>
+-#include <ConfidentialComputingGuestAttr.h>
+ #include "PeiDxeMemEncryptSevLibInternal.h"
+ 
+-STATIC UINT64   mCurrentAttr            = 0;
+-STATIC BOOLEAN  mCurrentAttrRead        = FALSE;
+ STATIC UINT64   mSevEncryptionMask      = 0;
+-STATIC BOOLEAN  mSevEncryptionMaskSaved = FALSE;
++STATIC BOOLEAN  mSevIsEnabled           = FALSE;
++STATIC BOOLEAN  mSevEsIsEnabled         = FALSE;
++STATIC BOOLEAN  mSevSnpIsEnabled        = FALSE;
+ 
+-/**
+-  The function check if the specified Attr is set.
+-
+-  @param[in]  CurrentAttr   The current attribute.
+-  @param[in]  Attr          The attribute to check.
+-
+-  @retval  TRUE      The specified Attr is set.
+-  @retval  FALSE     The specified Attr is not set.
+-
+-**/
+-STATIC
+-BOOLEAN
+-AmdMemEncryptionAttrCheck (
+-  IN  UINT64                             CurrentAttr,
+-  IN  CONFIDENTIAL_COMPUTING_GUEST_ATTR  Attr
+-  )
+-{
+-  switch (Attr) {
+-    case CCAttrAmdSev:
+-      //
+-      // SEV is automatically enabled if SEV-ES or SEV-SNP is active.
+-      //
+-      return CurrentAttr >= CCAttrAmdSev;
+-    case CCAttrAmdSevEs:
+-      //
+-      // SEV-ES is automatically enabled if SEV-SNP is active.
+-      //
+-      return CurrentAttr >= CCAttrAmdSevEs;
+-    case CCAttrAmdSevSnp:
+-      return CurrentAttr == CCAttrAmdSevSnp;
+-    default:
+-      return FALSE;
+-  }
+-}
+-
+-/**
+-  Check if the specified confidential computing attribute is active.
+-
+-  @param[in]  Attr          The attribute to check.
+-
+-  @retval TRUE   The specified Attr is active.
+-  @retval FALSE  The specified Attr is not active.
+-
+-**/
+-STATIC
+-BOOLEAN
++RETURN_STATUS
+ EFIAPI
+-ConfidentialComputingGuestHas (
+-  IN  CONFIDENTIAL_COMPUTING_GUEST_ATTR  Attr
++DxeMemEncryptSevLibConstructor (
++  VOID
+   )
+ {
++  SEC_SEV_ES_WORK_AREA     *SevEsWorkArea;
++  MSR_SEV_STATUS_REGISTER  Msr;
++
+   //
+-  // Get the current CC attribute.
+-  //
+-  // We avoid reading the PCD on every check because this routine could be indirectly
+-  // called during the virtual pointer conversion. And its not safe to access the
+-  // PCDs during the virtual pointer conversion.
++  // The work area should at least be EfiBootServicesData since the work area
++  // is also used for AP bring up to setup the AP jump table.
+   //
+-  if (!mCurrentAttrRead) {
+-    mCurrentAttr     = PcdGet64 (PcdConfidentialComputingGuestAttr);
+-    mCurrentAttrRead = TRUE;
++  SevEsWorkArea = GetSevEsWorkArea ();
++  if (SevEsWorkArea == NULL) {
++    goto Exit;
+   }
+ 
+   //
+-  // If attr is for the AMD group then call AMD specific checks.
++  // The work area will not be mapped at the expected physical address once
++  // SetVirtualAddressMap() is called. So fetch the values from the work area
++  // and store them in variables so the MemEncryptSev*() functions do not need
++  // to access the work area.
+   //
+-  if (((RShiftU64 (mCurrentAttr, 8)) & 0xff) == 1) {
+-    return AmdMemEncryptionAttrCheck (mCurrentAttr, Attr);
+-  }
+-
+-  return (mCurrentAttr == Attr);
++  Msr.Uint32              = (UINT32)(UINTN)SevEsWorkArea->SevStatusMsrValue;
++  mSevEncryptionMask      = SevEsWorkArea->EncryptionMask;
++  mSevIsEnabled           = Msr.Bits.SevBit ? TRUE : FALSE;
++  mSevEsIsEnabled         = Msr.Bits.SevEsBit ? TRUE : FALSE;
++  mSevSnpIsEnabled        = Msr.Bits.SevSnpBit ? TRUE : FALSE;
++
++Exit:
++  return RETURN_SUCCESS;
+ }
+ 
+ /**
+@@ -109,7 +69,7 @@ MemEncryptSevSnpIsEnabled (
+   VOID
+   )
+ {
+-  return ConfidentialComputingGuestHas (CCAttrAmdSevSnp);
++  return mSevSnpIsEnabled;
+ }
+ 
+ /**
+@@ -124,7 +84,7 @@ MemEncryptSevEsIsEnabled (
+   VOID
+   )
+ {
+-  return ConfidentialComputingGuestHas (CCAttrAmdSevEs);
++  return mSevEsIsEnabled;
+ }
+ 
+ /**
+@@ -139,7 +99,7 @@ MemEncryptSevIsEnabled (
+   VOID
+   )
+ {
+-  return ConfidentialComputingGuestHas (CCAttrAmdSev);
++  return mSevIsEnabled;
+ }
+ 
+ /**
+@@ -153,10 +113,5 @@ MemEncryptSevGetEncryptionMask (
+   VOID
+   )
+ {
+-  if (!mSevEncryptionMaskSaved) {
+-    mSevEncryptionMask      = PcdGet64 (PcdPteMemoryEncryptionAddressOrMask);
+-    mSevEncryptionMaskSaved = TRUE;
+-  }
+-
+   return mSevEncryptionMask;
+ }
