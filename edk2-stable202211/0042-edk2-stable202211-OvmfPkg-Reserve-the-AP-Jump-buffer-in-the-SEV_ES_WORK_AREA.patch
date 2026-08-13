@@ -1,0 +1,54 @@
+From 7a67ee4b8379438429259fa4c9f2652465c4e0bb Mon Sep 17 00:00:00 2001
+From: John Berg <jhnberg@amazon.co.uk>
+Date: Tue, 11 Aug 2026 09:46:59 +0000
+Subject: [PATCH] OvmfPkg: Reserve the AP Jump buffer in the SEV_ES_WORK_AREA
+
+The PcdSevEsWorkAreaBase is used for the work area for SEV-ES during Sec
+and Pei. During the Dxe phase, the same address is used for the
+SEV_ES_AP_JMP_FAR to start the AP CPUs. Since the SEV_ES_WORK_AREA is
+being reused it scribbles over the data from Sec/Pei. This patch adds a
+16 byte buffer to the start of the work area so that the values stored
+in the work area do not get overwritten. We also adjust the offsets for
+the work area in ResetVector.nasmb to correctly populate the work area.
+
+Signed-off-by: John Berg <jhnberg@amazon.co.uk>
+
+diff --git a/OvmfPkg/Include/WorkArea.h b/OvmfPkg/Include/WorkArea.h
+index bf56fc4a6f..619eefc90d 100644
+--- a/OvmfPkg/Include/WorkArea.h
++++ b/OvmfPkg/Include/WorkArea.h
+@@ -39,6 +39,13 @@ typedef struct _CONFIDENTIAL_COMPUTING_WORK_AREA_HEADER {
+ // any changes must stay in sync with its usage.
+ //
+ typedef struct _SEC_SEV_ES_WORK_AREA {
++  //
++  // AP jump table - must be offset 0 since the AP's initial RIP points
++  // here. This buffer must at least be the size of struct SEV_ES_AP_JMP_FAR.
++  // See SetSevEsJumpTable()
++  //
++  UINT8     ApJumpBuffer[16];
++
+   //
+   // Hold the SevStatus MSR value read by OvmfPkg/ResetVector/Ia32/AmdSev.c
+   //
+diff --git a/OvmfPkg/ResetVector/ResetVector.nasmb b/OvmfPkg/ResetVector/ResetVector.nasmb
+index 94fbb0a87b..3b6ba32f9f 100644
+--- a/OvmfPkg/ResetVector/ResetVector.nasmb
++++ b/OvmfPkg/ResetVector/ResetVector.nasmb
+@@ -54,11 +54,11 @@
+ %define GHCB_BASE                     (FixedPcdGet32 (PcdOvmfSecGhcbBase))
+ %define GHCB_SIZE                     (FixedPcdGet32 (PcdOvmfSecGhcbSize))
+ %define SEV_ES_WORK_AREA              (FixedPcdGet32 (PcdSevEsWorkAreaBase))
+-%define SEV_ES_WORK_AREA_SIZE         25
+-%define SEV_ES_WORK_AREA_STATUS_MSR   (FixedPcdGet32 (PcdSevEsWorkAreaBase))
+-%define SEV_ES_WORK_AREA_RDRAND       (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 8)
+-%define SEV_ES_WORK_AREA_ENC_MASK     (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 16)
+-%define SEV_ES_WORK_AREA_RECEIVED_VC  (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 24)
++%define SEV_ES_WORK_AREA_SIZE         41
++%define SEV_ES_WORK_AREA_STATUS_MSR   (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 16)
++%define SEV_ES_WORK_AREA_RDRAND       (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 24)
++%define SEV_ES_WORK_AREA_ENC_MASK     (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 32)
++%define SEV_ES_WORK_AREA_RECEIVED_VC  (FixedPcdGet32 (PcdSevEsWorkAreaBase) + 40)
+ %define SEV_ES_VC_TOP_OF_STACK        (FixedPcdGet32 (PcdOvmfSecPeiTempRamBase) + FixedPcdGet32 (PcdOvmfSecPeiTempRamSize))
+ %define SEV_SNP_SECRETS_BASE          (FixedPcdGet32 (PcdOvmfSnpSecretsBase))
+ %define SEV_SNP_SECRETS_SIZE          (FixedPcdGet32 (PcdOvmfSnpSecretsSize))

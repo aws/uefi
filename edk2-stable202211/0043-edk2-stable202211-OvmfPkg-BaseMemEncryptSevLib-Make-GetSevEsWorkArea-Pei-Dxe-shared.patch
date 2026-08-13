@@ -1,0 +1,162 @@
+From 095e70bf81df8668812a17a22351a1984e57f357 Mon Sep 17 00:00:00 2001
+From: John Berg <jhnberg@amazon.co.uk>
+Date: Thu, 13 Aug 2026 09:01:38 +0000
+Subject: [PATCH] OvmfPkg/BaseMemEncryptSevLib: Make GetSevEsWorkArea() Pei/Dxe
+ shared
+
+This is a small refactor to the BaseMemEncryptSevLib in the OvmfPkg
+which moves the function used in the Pei phase for accessing the
+SEC_SEV_ES_WORK_AREA, into the common Pei and Dxe code. The Dxe phase
+will consume the work area in a subsequent patch.
+
+Signed-off-by: John Berg <jhnberg@amazon.co.uk>
+
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
+index cc24961c92..72c64bf45c 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLib.inf
+@@ -32,6 +32,7 @@
+ [Sources]
+   DxeMemEncryptSevLibInternal.c
+   PeiDxeMemEncryptSevLibInternal.c
++  PeiDxeMemEncryptSevLibInternal.h
+ 
+ [Sources.X64]
+   X64/DxeSnpSystemRamValidate.c
+@@ -59,3 +60,7 @@
+ [Pcd]
+   gEfiMdeModulePkgTokenSpaceGuid.PcdPteMemoryEncryptionAddressOrMask
+   gEfiMdePkgTokenSpaceGuid.PcdConfidentialComputingGuestAttr
++
++[FixedPcd]
++  gUefiCpuPkgTokenSpaceGuid.PcdSevEsWorkAreaBase
++  gUefiOvmfPkgTokenSpaceGuid.PcdOvmfWorkAreaBase
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
+index 4aba0075b9..6c17367632 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/DxeMemEncryptSevLibInternal.c
+@@ -17,6 +17,7 @@
+ #include <Register/Cpuid.h>
+ #include <Uefi/UefiBaseType.h>
+ #include <ConfidentialComputingGuestAttr.h>
++#include "PeiDxeMemEncryptSevLibInternal.h"
+ 
+ STATIC UINT64   mCurrentAttr            = 0;
+ STATIC BOOLEAN  mCurrentAttrRead        = FALSE;
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.c b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.c
+index 78ea16ae06..edcbb91ab5 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.c
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.c
+@@ -15,6 +15,32 @@
+ #include <Register/QemuSmramSaveStateMap.h>
+ #include <Register/SmramSaveStateMap.h>
+ #include <Uefi/UefiBaseType.h>
++#include "PeiDxeMemEncryptSevLibInternal.h"
++
++/**
++   Read the workarea to determine whether SEV is enabled. If enabled,
++   then return the SevEsWorkArea pointer.
++
++  **/
++SEC_SEV_ES_WORK_AREA *
++EFIAPI
++GetSevEsWorkArea (
++  VOID
++  )
++{
++  OVMF_WORK_AREA  *WorkArea;
++
++  WorkArea = (OVMF_WORK_AREA *)FixedPcdGet32 (PcdOvmfWorkAreaBase);
++
++  //
++  // If its not SEV guest then SevEsWorkArea is not valid.
++  //
++  if ((WorkArea == NULL) || (WorkArea->Header.GuestType != CcGuestTypeAmdSev)) {
++    return NULL;
++  }
++
++  return (SEC_SEV_ES_WORK_AREA *)FixedPcdGet32 (PcdSevEsWorkAreaBase);
++}
+ 
+ /**
+   Locate the page range that covers the initial (pre-SMBASE-relocation) SMRAM
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.h b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.h
+new file mode 100644
+index 0000000000..91d086d20c
+--- /dev/null
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiDxeMemEncryptSevLibInternal.h
+@@ -0,0 +1,24 @@
++/** @file
++
++  Internal interfaces for the PEI and DXE MemEncryptSevLib instances.
++
++  Copyright (c) 2026, Amazon.com, Inc. or its affiliates. All rights reserved.<BR>
++
++  SPDX-License-Identifier: BSD-2-Clause-Patent
++
++**/
++
++#pragma once
++
++#include <WorkArea.h>
++
++/**
++   Read the workarea to determine whether SEV is enabled. If enabled,
++   then return the SevEsWorkArea pointer.
++
++  **/
++SEC_SEV_ES_WORK_AREA *
++EFIAPI
++GetSevEsWorkArea (
++  VOID
++  );
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLib.inf b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLib.inf
+index 8f56783da5..f93b030f4d 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLib.inf
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLib.inf
+@@ -31,6 +31,7 @@
+ 
+ [Sources]
+   PeiDxeMemEncryptSevLibInternal.c
++  PeiDxeMemEncryptSevLibInternal.h
+   PeiMemEncryptSevLibInternal.c
+ 
+ [Sources.X64]
+diff --git a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLibInternal.c b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLibInternal.c
+index 41d1246a5b..3918b7eafc 100644
+--- a/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLibInternal.c
++++ b/OvmfPkg/Library/BaseMemEncryptSevLib/PeiMemEncryptSevLibInternal.c
+@@ -16,32 +16,7 @@
+ #include <Register/Amd/Msr.h>
+ #include <Register/Cpuid.h>
+ #include <Uefi/UefiBaseType.h>
+-
+-/**
+-   Read the workarea to determine whether SEV is enabled. If enabled,
+-   then return the SevEsWorkArea pointer.
+-
+-  **/
+-STATIC
+-SEC_SEV_ES_WORK_AREA *
+-EFIAPI
+-GetSevEsWorkArea (
+-  VOID
+-  )
+-{
+-  OVMF_WORK_AREA  *WorkArea;
+-
+-  WorkArea = (OVMF_WORK_AREA *)FixedPcdGet32 (PcdOvmfWorkAreaBase);
+-
+-  //
+-  // If its not SEV guest then SevEsWorkArea is not valid.
+-  //
+-  if ((WorkArea == NULL) || (WorkArea->Header.GuestType != CcGuestTypeAmdSev)) {
+-    return NULL;
+-  }
+-
+-  return (SEC_SEV_ES_WORK_AREA *)FixedPcdGet32 (PcdSevEsWorkAreaBase);
+-}
++#include "PeiDxeMemEncryptSevLibInternal.h"
+ 
+ /**
+   Read the SEV Status MSR value from the workarea
