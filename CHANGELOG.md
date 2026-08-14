@@ -1,3 +1,9 @@
+## 2026-08-14
+
+- Fix spurious interrupt re-enable in SEV encryption mask lookup causing guest hangs
+
+SHA256: 67aaae01a6f4245cc071e008859b00ea2b5c05824362c41d165c3b4751372bc9
+
 ## 2024-08-09
 
 - Enable security fixes
